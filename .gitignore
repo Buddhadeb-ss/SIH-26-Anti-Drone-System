@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Build files
+Debug/
+Release/
+*.o
+*.elf
+*.hex
+*.bin
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db
