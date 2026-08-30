@@ -26,6 +26,12 @@ def parse_args():
         action="store_true",
         help="Run in mock/simulation mode (no hardware required).",
     )
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Use the existing CV pipeline on a video while hardware remains mocked.",
+    )
     return parser.parse_args()
 
 
@@ -38,7 +44,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # consistent, clean look across platforms
 
-    window = DashboardWindow(mock_mode=mock_mode)
+    window = DashboardWindow(mock_mode=mock_mode, video_path=args.video)
     window.show()
 
     sys.exit(app.exec())

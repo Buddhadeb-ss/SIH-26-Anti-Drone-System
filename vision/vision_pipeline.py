@@ -216,7 +216,18 @@ def serial_reader_thread(ser):
 # ==========================================
 # 4. Main Perception Pipeline
 # ==========================================
-def run_perception_pipeline(source_path, serial_port, baud_rate, use_yolo, weights_path="yolov8n.pt"):
+def run_perception_pipeline(
+    source_path,
+    serial_port,
+    baud_rate,
+    use_yolo,
+    weights_path="yolov8n.pt",
+    dashboard_callback=None,
+    enable_serial=True,
+    display=True,
+    loop_video=False,
+    stop_event=None,
+):
     global last_tx_time, current_system_state, current_mcu_lock
     global FOCAL_LENGTH_X, FOCAL_LENGTH_Y, CENTER_X, CENTER_Y
 
@@ -237,17 +248,22 @@ def run_perception_pipeline(source_path, serial_port, baud_rate, use_yolo, weigh
         print(f"[VISION] No calibration file '{calib_file}' found. Using default camera parameters.")
     
     # 4.1. Initialize Serial Link
-    try:
-        ser = serial.Serial(serial_port, baud_rate, timeout=1.0)
-        print(f"[SERIAL] Connected to physical port '{serial_port}' at {baud_rate} baud.")
-    except Exception as e:
-        print(f"[SERIAL WARNING] Could not connect to physical port '{serial_port}': {e}")
-        print("[SERIAL WARNING] Falling back to DummySerial loopback mode.")
-        ser = DummySerial(serial_port, baud_rate)
+    # Dashboard integration mode disables serial because the dashboard uses
+    # its own mock STM32 data. Standalone/real mode keeps serial behavior.
+    ser = None
+    if enable_serial:
+        try:
+            ser = serial.Serial(serial_port, baud_rate, timeout=1.0)
+            print(f"[SERIAL] Connected to physical port '{serial_port}' at {baud_rate} baud.")
+        except Exception as e:
+            print(f"[SERIAL WARNING] Could not connect to physical port '{serial_port}': {e}")
+            print("[SERIAL WARNING] Falling back to DummySerial loopback mode.")
+            ser = DummySerial(serial_port, baud_rate)
 
-    # Start serial reading thread
-    reader = threading.Thread(target=serial_reader_thread, args=(ser,), daemon=True)
-    reader.start()
+        reader = threading.Thread(target=serial_reader_thread, args=(ser,), daemon=True)
+        reader.start()
+    else:
+        print("[SERIAL] Disabled for dashboard integration mode.")
 
     # 4.2. Initialize Detector & Tracker
     import torch
@@ -337,18 +353,27 @@ def run_perception_pipeline(source_path, serial_port, baud_rate, use_yolo, weigh
     occlusion_active = False
     radar_measurement = None
 
-    cv2.namedWindow("SIH26050 - Tactical Commander HUD", cv2.WINDOW_NORMAL)
+    if display:
+        cv2.namedWindow("SIH26050 - Tactical Commander HUD", cv2.WINDOW_NORMAL)
 
     while cap.isOpened():
+        if stop_event is not None and stop_event.is_set():
+            print("[VISION] Stop requested by dashboard.")
+            break
+
         start_frame_time = time.time()
         ret, frame = cap.read()
         if not ret:
+            if loop_video and not isinstance(source_path, int):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
             print("[VISION] End of stream or empty frame received.")
             break
             
         frame_counter += 1
         bbox = None
         target_found = False
+        best_conf = 0.0
 
         # 4.4. Detection & Tracking Logic (Ground Truth capture for simulator)
         ground_truth_bbox = None
@@ -468,7 +493,7 @@ def run_perception_pipeline(source_path, serial_port, baud_rate, use_yolo, weigh
             current_mcu_lock = 0
 
         # 4.7. Send Telemetry to STM32 at 10 Hz
-        if current_time - last_tx_time >= TELEMETRY_TX_INTERVAL:
+        if enable_serial and ser is not None and current_time - last_tx_time >= TELEMETRY_TX_INTERVAL:
             serial_command = f"X{pan_err:+.2f}Y{tilt_err:+.2f}Z{target_distance:.2f}\n"
             ser.write(serial_command.encode('ascii'))
             last_tx_time = current_time
@@ -566,26 +591,44 @@ def run_perception_pipeline(source_path, serial_port, baud_rate, use_yolo, weigh
         cv2.putText(frame, f"LATENCY: {latency_ms:.1f} ms", (width - 160, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        # Show frame
-        cv2.imshow("SIH26050 - Tactical Commander HUD", frame)
-        
-        # Keypress handler
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("[VISION] Exiting pipeline.")
-            break
-        elif key == ord('o'):
-            occlusion_active = not occlusion_active
-            print(f"[VISION] Occlusion state toggled: {occlusion_active}")
-        elif key == ord('r'):
-            # Force trigger homing (simulate a slip reset)
-            print("[VISION] Reset request triggered.")
-            ser.write(b"RESET\n")
+        # Publish processed output to the dashboard when requested.
+        if dashboard_callback is not None:
+            elapsed = max(time.time() - start_frame_time, 1e-6)
+            dashboard_callback({
+                "frame": frame.copy(),
+                "detected": bool(target_found),
+                "bbox": tuple(float(v) for v in bbox) if bbox is not None else None,
+                "confidence": float(best_conf) if 'best_conf' in locals() else 0.0,
+                "state": STATE_NAMES[current_system_state],
+                "distance": float(target_distance),
+                "pan_error": float(pan_err),
+                "tilt_error": float(tilt_err),
+                "fps": float(1.0 / elapsed),
+            })
+
+        # Standalone mode keeps the original OpenCV window and controls.
+        if display:
+            cv2.imshow("SIH26050 - Tactical Commander HUD", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("[VISION] Exiting pipeline.")
+                break
+            elif key == ord('o'):
+                occlusion_active = not occlusion_active
+                print(f"[VISION] Occlusion state toggled: {occlusion_active}")
+            elif key == ord('r'):
+                print("[VISION] Reset request triggered.")
+                if ser is not None:
+                    ser.write(b"RESET\n")
+
 
     # Cleanup
     cap.release()
-    ser.close()
-    cv2.destroyAllWindows()
+    if ser is not None:
+        ser.close()
+    if display:
+        cv2.destroyAllWindows()
     print("[VISION] Resources released successfully.")
 
 # ==========================================

@@ -63,6 +63,9 @@ class DetectionData:
     confidence: float = 0.0          # 0.0 - 1.0
     fps: float = 0.0
     state: str = SystemState.SEARCHING
+    distance: Optional[float] = None
+    pan_error: Optional[float] = None
+    tilt_error: Optional[float] = None
 
     # Optional: a pre-annotated frame (numpy array / BGR image) coming
     # from the CV system, already drawn with boxes/labels. If provided,

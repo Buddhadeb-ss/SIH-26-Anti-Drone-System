@@ -21,6 +21,12 @@ Release/
 # Environment / secrets
 .env
 
+# ML models
+*.pt
+
+# Test videos
+vision/test_videos/*.mp4
+
 # OS
 .DS_Store
 Thumbs.db

@@ -135,10 +135,12 @@ class CameraPanel(Panel):
         frame: raw BGR numpy array (from OpenCV or a generated mock frame)
         detection: DetectionData with overlay info to draw
         """
-        display_frame = frame.copy()
-
-        if _CV2_AVAILABLE and detection is not None and detection.detected:
-            self._draw_overlay(display_frame, detection)
+        if detection is not None and detection.annotated_frame is not None:
+            display_frame = detection.annotated_frame.copy()
+        else:
+            display_frame = frame.copy()
+            if _CV2_AVAILABLE and detection is not None and detection.detected:
+                self._draw_overlay(display_frame, detection)
 
         self._render_frame(display_frame)
 
@@ -228,6 +230,12 @@ class TargetInfoPanel(Panel):
     def update_distance(self, radar_data):
         if radar_data and radar_data.detected and radar_data.distance is not None:
             self.distance_label.setText(f"{radar_data.distance:.0f} m")
+        else:
+            self.distance_label.setText("--")
+
+    def update_distance_value(self, distance):
+        if distance is not None:
+            self.distance_label.setText(f"{float(distance):.0f} m")
         else:
             self.distance_label.setText("--")
 
@@ -367,9 +375,10 @@ class DashboardWindow(QMainWindow):
     (real or mock) on a QTimer.
     """
 
-    def __init__(self, mock_mode: bool = False):
+    def __init__(self, mock_mode: bool = False, video_path: str = None):
         super().__init__()
         self.mock_mode = mock_mode
+        self.video_path = video_path
 
         self.setWindowTitle("SIH 2026 - Anti-Drone System Dashboard")
         self.setStyleSheet("background-color: #05080a;")
@@ -382,6 +391,14 @@ class DashboardWindow(QMainWindow):
             )
             self.cv_interface = None
             self.serial_link = None
+
+            if self.video_path:
+                self.cv_interface = CVInterface()
+                if not self.cv_interface.start_video_pipeline(self.video_path):
+                    print(
+                        "[DASHBOARD] CV pipeline failed to start: "
+                        f"{self.cv_interface.get_vision_error()}"
+                    )
         else:
             self.mock_generator = None
             self.cv_interface = CVInterface()
@@ -444,10 +461,52 @@ class DashboardWindow(QMainWindow):
         self.timer.start(interval)
 
     def _on_tick(self):
-        if self.mock_mode:
+        if self.mock_mode and self.video_path:
+            self._tick_mock_video()
+        elif self.mock_mode:
             self._tick_mock()
         else:
             self._tick_real()
+
+    def _tick_mock_video(self):
+        self.mock_generator.tick()
+        detection = self.cv_interface.get_latest_detection()
+        radar_data = self.mock_generator.get_radar_data()
+        stm32_data = self.mock_generator.get_stm32_data()
+        frame = self.cv_interface.get_latest_frame()
+
+        if frame is not None:
+            self.camera_panel.show_frame(frame, detection, mock_mode=True)
+        elif self.cv_interface.get_vision_error():
+            self.camera_panel.show_offline()
+            self.camera_panel.video_label.setText("CV OFFLINE")
+        else:
+            self.camera_panel.show_offline()
+
+        self.radar_display.update_radar_data(radar_data)
+
+        state = detection.state if detection is not None else SystemState.SEARCHING
+        self.target_info_panel.update_info(detection, state)
+
+        if detection is not None and detection.distance is not None:
+            self.target_info_panel.update_distance_value(detection.distance)
+        else:
+            self.target_info_panel.update_distance(radar_data)
+
+        self.stm32_panel.update_data(stm32_data)
+        self.header.set_state(state)
+
+        health = SystemHealth(
+            camera_online=frame is not None,
+            cv_online=(
+                self.cv_interface.get_vision_error() is None
+                and self.cv_interface.is_video_pipeline_running()
+            ),
+            radar_online=True,
+            stm32_online=True,
+            serial_connected=True,
+        )
+        self.health_bar.update_health(health)
 
     def _tick_mock(self):
         self.mock_generator.tick()
