@@ -375,10 +375,20 @@ class DashboardWindow(QMainWindow):
     (real or mock) on a QTimer.
     """
 
-    def __init__(self, mock_mode: bool = False, video_path: str = None):
+    def __init__(
+        self,
+        mock_mode: bool = False,
+        video_path: str = None,
+        camera_index: int = None,
+    ):
         super().__init__()
         self.mock_mode = mock_mode
         self.video_path = video_path
+        self.camera_index = camera_index
+
+        # Camera mode and video mode are mutually exclusive.
+        if self.video_path is not None and self.camera_index is not None:
+            raise ValueError("Use either video_path or camera_index, not both.")
 
         self.setWindowTitle("SIH 2026 - Anti-Drone System Dashboard")
         self.setStyleSheet("background-color: #05080a;")
@@ -392,11 +402,22 @@ class DashboardWindow(QMainWindow):
             self.cv_interface = None
             self.serial_link = None
 
-            if self.video_path:
+            # Real camera + real CV, while radar/STM32 remain mocked.
+            # The CV pipeline owns VideoCapture so the camera is opened only once.
+            if self.camera_index is not None:
+                self.cv_interface = CVInterface(camera_index=self.camera_index)
+                if not self.cv_interface.start_camera_pipeline(self.camera_index):
+                    print(
+                        "[DASHBOARD] Camera CV pipeline failed to start: "
+                        f"{self.cv_interface.get_vision_error()}"
+                    )
+
+            # Existing real CV + test-video mode.
+            elif self.video_path is not None:
                 self.cv_interface = CVInterface()
                 if not self.cv_interface.start_video_pipeline(self.video_path):
                     print(
-                        "[DASHBOARD] CV pipeline failed to start: "
+                        "[DASHBOARD] Video CV pipeline failed to start: "
                         f"{self.cv_interface.get_vision_error()}"
                     )
         else:
@@ -461,7 +482,9 @@ class DashboardWindow(QMainWindow):
         self.timer.start(interval)
 
     def _on_tick(self):
-        if self.mock_mode and self.video_path:
+        if self.mock_mode and (
+            self.video_path is not None or self.camera_index is not None
+        ):
             self._tick_mock_video()
         elif self.mock_mode:
             self._tick_mock()
@@ -469,6 +492,7 @@ class DashboardWindow(QMainWindow):
             self._tick_real()
 
     def _tick_mock_video(self):
+        # Shared dashboard path for either a real test video or a live camera.
         self.mock_generator.tick()
         detection = self.cv_interface.get_latest_detection()
         radar_data = self.mock_generator.get_radar_data()
