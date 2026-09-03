@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anti-Drone System · Scenario Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"><span>◈</span></div>
+      <div>
+        <div class="brand-title">ANTI-DRONE SYSTEM</div>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tracking">01 · TRACKING &amp; DETECTION</button>
+      <button class="tab-btn" data-tab="env">02 · ENVIRONMENTAL &amp; THERMAL</button>
+    </div>
+    <div class="topbar-right">
+      <div class="pill sim" id="sourcePill" title="Press H to toggle">SRC: SIMULATION</div>
+      <div class="clock" id="clockReadout">T+00:00:00</div>
+    </div>
+  </header>
+
+  <!-- ============ TRACKING VIEW ============ -->
+  <main class="view active" id="view-tracking">
+    <section class="viewport-wrap" id="viewportWrap">
+      <canvas id="mainCanvas"></canvas>
+      <div class="viewport-hud">
+        <div class="hud-topleft">
+          <div class="hud-row">SITE ALT <b id="hudAlt">4500</b> m &nbsp;|&nbsp; SCENARIO <b id="hudScenario">01 · STRAIGHT APPROACH</b></div>
+        </div>
+        <div class="hud-topright">
+          <div class="lock-badge searching" id="lockBadge">SEARCHING</div>
+        </div>
+        <div class="hud-bottomleft">drag = orbit &nbsp;·&nbsp; scroll = zoom &nbsp;·&nbsp; keys 1–9,0 = scenarios</div>
+      </div>
+    </section>
+
+    <aside class="side-rail">
+
+      <div class="panel" id="panel-target">
+        <div class="panel-title">Target Data <span class="tag" id="targetIdTag">NO TRACK</span></div>
+        <div class="data-row"><span>Classification</span><b id="tClass">—</b></div>
+        <div class="data-row"><span>Range</span><b id="tRange">— m</b></div>
+        <div class="data-row"><span>Azimuth / Elevation</span><b id="tAzEl">—</b></div>
+        <div class="data-row"><span>Altitude AGL</span><b id="tAlt">— m</b></div>
+        <div class="data-row"><span>Closing Speed</span><b id="tSpd">— m/s</b></div>
+        <div class="data-row"><span>RCS Estimate</span><b id="tRcs">— dBsm</b></div>
+        <div class="data-row"><span>Threat Level</span><span class="threat-badge threat-LOW" id="tThreat">LOW</span></div>
+        <button class="btn-engage" id="engageBtn" disabled>ENGAGE / NEUTRALIZE (N)</button>
+      </div>
+
+      <div class="panel" id="panel-gimbal-radar">
+        <div class="panel-title">Gimbal &amp; Radar</div>
+        <div class="subgrid">
+          <div>
+            <div class="subhead">Gimbal</div>
+            <div class="data-row"><span>Pan</span><b id="gPan">0.0°</b></div>
+            <div class="data-row"><span>Tilt</span><b id="gTilt">0.0°</b></div>
+            <div class="data-row"><span>Slew Rate</span><b id="gSlew">90°/s</b></div>
+            <div class="data-row"><span>Pointing Err</span><b id="gErr">— µrad</b></div>
+          </div>
+          <div>
+            <div class="subhead">Radar / EO</div>
+            <div class="data-row"><span>Radar Mode</span><b id="rMode">SEARCH</b></div>
+            <div class="data-row"><span>Radar Range</span><b>520 m</b></div>
+            <div class="data-row"><span>EO Lock Range</span><b>300 m</b></div>
+            <div class="data-row"><span>CV Confidence</span><b id="cvConf">—</b></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-cv">
+        <div class="panel-title">CV Detection Output <span class="tag" id="cvSourceTag">SIM</span></div>
+        <div class="cv-inset-wrap">
+          <canvas id="cvCanvas" width="320" height="192"></canvas>
+          <canvas id="cvOverlay" width="320" height="192"></canvas>
+        </div>
+        <div class="cv-caption" id="cvCaption">Synthetic gimbal-camera render used as demo fallback per Scenario Simulation plan. Press H to preview the hardware-feed placeholder.</div>
+      </div>
+
+      <div class="panel" id="panel-scenarios">
+        <div class="panel-title">Scenario Select</div>
+        <div class="scenario-grid" id="scenarioGrid"></div>
+        <div class="action-row">
+          <div class="action-chip" data-act="R" id="chipR">R · RANDOM</div>
+          <div class="action-chip" data-act="H" id="chipH">H · SRC</div>
+          <div class="action-chip" data-act="SPACE" id="chipSpace">⎵ PAUSE</div>
+          <div class="action-chip" data-act="C" id="chipC">C · RESET</div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- ============ ENVIRONMENTAL VIEW ============ -->
+  <main class="view" id="view-env">
+    <div class="env-grid">
+
+      <div class="panel span-full" id="panel-altitude">
+        <div class="panel-title">Deployment Altitude &amp; Ambient Conditions</div>
+        <div class="alt-row">
+          <input type="range" id="altSlider" min="0" max="6200" step="50" value="4500">
+          <div class="alt-presets">
+            <button class="preset-btn" data-alt="0">SEA LEVEL</button>
+            <button class="preset-btn" data-alt="3500">LEH · 3500m</button>
+            <button class="preset-btn" data-alt="5000">SIACHEN · 5000m</button>
+            <button class="preset-btn" data-alt="6200">EXTREME · 6200m</button>
+          </div>
+        </div>
+        <div class="readout-grid">
+          <div class="readout"><div class="rv" id="roAlt">4500 m</div><div class="rl">Altitude</div></div>
+          <div class="readout"><div class="rv" id="roTemp">−14.3°C</div><div class="rl">Ambient Temp</div></div>
+          <div class="readout"><div class="rv" id="roPress">57.7 kPa</div><div class="rl">Atmospheric Pressure</div></div>
+          <div class="readout"><div class="rv" id="roDensity">63%</div><div class="rl">Air Density (vs sea level)</div></div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-thermal">
+        <div class="panel-title">NTC Thermal Management <span class="tag">STM32-monitored</span></div>
+        <div class="thermo-wrap">
+          <div class="thermo-bar-wrap">
+            <div class="thermo-bar" id="thermoBar"><div class="thermo-fill" id="thermoFill"></div></div>
+            <div class="thermo-val" id="thermoVal">—</div>
+          </div>
+          <div class="chart-col">
+            <canvas id="tempChart" width="600" height="150"></canvas>
+          </div>
+        </div>
+        <div class="indicator-row">
+          <div class="indicator cool" id="indHeater"><div class="dot"></div><div><div class="it">HEATER</div><div class="is" id="heaterState">OFF</div></div></div>
+          <div class="indicator" id="indFan"><div class="dot"></div><div><div class="it">COOLING FAN</div><div class="is" id="fanState">OFF</div></div></div>
+        </div>
+        <div class="toggle-row">
+          <span>Force max thermal load (stress-test demo)</span>
+          <div class="switch" id="loadSwitch"><div class="knob"></div></div>
+        </div>
+        <div class="predict-note" id="predictNote">Component tracking ambient — no active thermal event.</div>
+        <div class="predict-note">Thermal response accelerated ~6× for live demonstration.</div>
+      </div>
+
+      <div class="panel" id="panel-pdw">
+        <div class="panel-title">Pressure · Dust · Wind Hardening <span class="tag">Hardware-in-the-loop</span></div>
+        <div class="bar-gauge">
+          <div class="bh"><span>Enclosure Pressure Equalization <span class="hw-tag">HW: Gore-Tex vent + sealed IP6X shell</span></span><span id="pdwPress">ΔP ≈ 0 kPa</span></div>
+          <div class="bar-track"><div class="bar-fill" id="pressBar" style="width:100%"></div></div>
+        </div>
+        <div class="status-line" id="pressStatus">SEALED — GORE VENT NOMINAL</div>
+        <div class="predict-note" id="pressNote">Gathering pressure trend…</div>
+
+        <div class="bar-gauge" style="margin-top:14px;">
+          <div class="bh"><span>Particulate Concentration <span class="hw-tag">HW: sealed IP6X shell + auto-wipe lens + purge fan</span></span><span id="dustReadout">5 µg/m³</span></div>
+          <div class="bar-track"><div class="bar-fill" id="dustBar" style="width:1%;background:var(--ember)"></div></div>
+        </div>
+        <button class="dust-btn" id="dustBtn">SIMULATE DUST STORM</button>
+        <div class="status-line" id="dustStatus">IP6X SEALED — 0 INGRESS DETECTED</div>
+        <div class="predict-note" id="dustNote">No particulate ingress detected.</div>
+
+        <div class="bar-gauge" style="margin-top:14px;">
+          <div class="bh"><span>Wind Speed <span class="hw-tag">HW: direct-drive pan/tilt motors + encoders</span></span><span id="windReadout">6 m/s</span></div>
+          <input type="range" id="windSlider" min="0" max="30" step="1" value="6">
+        </div>
+        <div class="data-row"><span>Stabilization Compensation</span><b id="windComp">— N·m</b></div>
+        <div class="data-row"><span>Residual Pointing Error</span><b id="windErr">— µrad (spec &lt;50)</b></div>
+        <div class="status-line" id="windStatus">CLOSED-LOOP STABILIZATION ACTIVE</div>
+        <div class="predict-note" id="windNote">Gathering stabilization trend…</div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <span><b>Scenarios</b> 1 Straight · 2 Left→Right · 3 Right→Left · 4 Climbing · 5 Maneuver · 6 Diving · 7 Hover/ISR · 8 Orbit · 9 Erratic/Jam · 0 Swarm ×3 &nbsp;|&nbsp; <b>Actions</b> R Random · H Source · N Engage · Space Pause · C Reset</span>
+    <span id="footRight">ANTI-DRONE SYSTEM</span>
+  </footer>
+
+  <div class="toast" id="toast"></div>
+  <div id="dustFx"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
