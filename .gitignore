@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Build files
+Debug/
+Release/
+*.o
+*.elf
+*.hex
+*.bin
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+
+# ML models
+*.pt
+
+# Test videos
+vision/test_videos/*.mp4
+
+# OS
+.DS_Store
+Thumbs.db
