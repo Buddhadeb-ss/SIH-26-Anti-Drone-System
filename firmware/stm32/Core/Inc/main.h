@@ -83,8 +83,6 @@ void Error_Handler(void);
 #define VCP_TX_GPIO_Port GPIOA
 #define VCP_RX_Pin GPIO_PIN_3
 #define VCP_RX_GPIO_Port GPIOA
-#define Laser_Pin GPIO_PIN_10
-#define Laser_GPIO_Port GPIOB
 #define Pan_A4988_DIR_Pin GPIO_PIN_6
 #define Pan_A4988_DIR_GPIO_Port GPIOC
 #define Tilt_A4988_DIR_Pin GPIO_PIN_7
@@ -105,6 +103,8 @@ void Error_Handler(void);
 #define TCK_GPIO_Port GPIOA
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define Laser_Pin GPIO_PIN_4
+#define Laser_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

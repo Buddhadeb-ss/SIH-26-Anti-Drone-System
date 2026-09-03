@@ -107,6 +107,7 @@ int main(void)
   MX_TIM10_Init();
   MX_I2C1_Init();
   MX_USART3_UART_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   //Start the Motor Pulse Generator Timer (TIM10)
     HAL_TIM_Base_Start_IT(&htim10);
@@ -284,6 +285,23 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
             };
             osMessageQueuePut(TargetQueueHandle, &rear_target, 0, 0);
         }
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart3, blindspot_rx_buffer, sizeof(blindspot_rx_buffer));
+    }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    // EMI/Glitch Recovery: If a motor spike corrupts a serial byte,
+    // the hardware will throw an error and halt the DMA stream.
+    // This function catches the crash and instantly re-arms the stream.
+
+    if (huart->Instance == USART1) {
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart1, radar_rx_buffer, sizeof(radar_rx_buffer));
+    }
+    else if (huart->Instance == USART2) {
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart2, c2_ping_pong[active_c2_buffer], 32);
+    }
+    else if (huart->Instance == USART3) {
         HAL_UARTEx_ReceiveToIdle_DMA(&huart3, blindspot_rx_buffer, sizeof(blindspot_rx_buffer));
     }
 }

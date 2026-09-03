@@ -191,145 +191,144 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-	  extern I2C_HandleTypeDef hi2c1;
-	  extern volatile int32_t pan_target_steps;
-	  extern volatile int32_t tilt_target_steps;
-	  extern volatile int32_t pan_current_steps;
+	extern I2C_HandleTypeDef hi2c1;
+	    extern I2C_HandleTypeDef hi2c2;
+	    extern UART_HandleTypeDef huart2;
 
-	  TargetData_t current_target;
-	  PodState_t pod_state = POD_STATE_SEARCH;
+	    extern volatile int32_t pan_target_steps;
+	    extern volatile int32_t tilt_target_steps;
+	    extern volatile int32_t pan_current_steps;
+	    extern volatile int32_t tilt_current_steps;
 
-	  float current_pan_angle = 0.0f;
-	  float current_tilt_angle = 0.0f;
-	  int sweep_direction = 1;
+	    char telemetry_buf[64];
+	    TargetData_t current_target;
+	    PodState_t pod_state = POD_STATE_SEARCH;
 
-	  const float DEADBAND_DEG = 1.0f;
-	  uint32_t last_vision_tick = 0;
-	  uint32_t last_radar_tick = 0;
-	  uint32_t last_fire_tick = 0;
+	    float current_pan_angle = 0.0f;
+	    float current_tilt_angle = 0.0f;
+	    int sweep_direction = 1;
 
-	  const uint32_t VISION_TIMEOUT = 500;     // Fallback to radar after 500ms blind
-	  const uint32_t SEARCH_TIMEOUT = 2000;    // Revert to search after 2000ms total loss
-	  const uint32_t FIRE_COOLDOWN_MS = 3000;  // 3-second lockout between trigger actions
+	    const float DEADBAND_DEG = 1.0f;
+	    uint32_t last_vision_tick = 0;
+	    uint32_t last_radar_tick = 0;
+	    uint32_t last_fire_tick = 0;
 
-	  	  // --- ABSOLUTE HOMING VIA AS5600 ---
-	  	  const uint16_t AS5600_ADDR = 0x36 << 1;
-	  	  uint8_t i2c_buf[2];
+	    const uint32_t VISION_TIMEOUT = 500;
+	    const uint32_t SEARCH_TIMEOUT = 2000;
+	    const uint32_t FIRE_COOLDOWN_MS = 3000;
 
-	  	  if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf, 2, 100) == HAL_OK)
-	  	  {
-	  	      uint16_t raw_angle = (i2c_buf[0] << 8) | i2c_buf[1];
-	  	      float boot_angle = ((float)raw_angle * 360.0f) / 4096.0f - 180.0f;
+	    // --- ABSOLUTE HOMING VIA AS5600 ---
+	    const uint16_t AS5600_ADDR = 0x36 << 1;
+	    uint8_t i2c_buf[2];
 
-	  	      current_pan_angle = boot_angle;
+	    // Boot alignment for PAN
+	    if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf, 2, 100) == HAL_OK) {
+	        uint16_t raw_angle = (i2c_buf[0] << 8) | i2c_buf[1];
+	        float boot_angle = ((float)raw_angle * 360.0f) / 4096.0f - 180.0f;
+	        current_pan_angle = boot_angle;
+	        pan_current_steps = (int32_t)(boot_angle / 0.1125f);
+	        pan_target_steps = pan_current_steps;
+	    }
+	    // Boot alignment for TILT
+	    if (HAL_I2C_Mem_Read(&hi2c2, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf, 2, 100) == HAL_OK) {
+	        uint16_t raw_angle = (i2c_buf[0] << 8) | i2c_buf[1];
+	        float boot_angle = ((float)raw_angle * 360.0f) / 4096.0f - 180.0f;
+	        current_tilt_angle = boot_angle;
+	        tilt_current_steps = (int32_t)(boot_angle / 0.1125f);
+	        tilt_target_steps = tilt_current_steps;
+	    }
 
-	  	      // FIXED: 1/16th Microstepping Boot Assignment
-	  	      pan_current_steps = (int32_t)(boot_angle / 0.1125f);
-	  	      pan_target_steps = pan_current_steps;
-	  	  }
+	    for(;;)
+	    {
+	        bool vision_updated = false;
+	        bool radar_updated = false;
+	        bool blindspot_updated = false;
+	        TargetData_t latest_vision = {0};
+	        TargetData_t latest_radar = {0};
 
-	  for(;;)
-	  	  {
-	  	      bool vision_updated = false;
-	  	      bool radar_updated = false;
-	  	      bool blindspot_updated = false;
+	        // 1. Drain the queue
+	        while (osMessageQueueGet(TargetQueueHandle, &current_target, NULL, 0) == osOK)
+	        {
+	            if (current_target.src == SOURCE_VISION_C2) {
+	                latest_vision = current_target;
+	                vision_updated = true;
+	            } else if (current_target.src == SOURCE_RADAR_LD2452) {
+	                latest_radar = current_target;
+	                radar_updated = true;
+	            } else if (current_target.src == SOURCE_RADAR_BLINDSPOT) {
+	                blindspot_updated = true;
+	            }
+	        }
 
-	  	      TargetData_t latest_vision, latest_radar, latest_blindspot;
+	        // --- TELEMETRY BROADCAST TO C2 DASHBOARD ---
+	        if (radar_updated) {
+	            uint16_t len = snprintf(telemetry_buf, sizeof(telemetry_buf), "<RADAR:FRONT,%.1f,%.1f>\n", latest_radar.x_val, latest_radar.distance);
+	            HAL_UART_Transmit(&huart2, (uint8_t*)telemetry_buf, len, 15);
+	        }
+	        if (blindspot_updated) {
+	            uint16_t len = snprintf(telemetry_buf, sizeof(telemetry_buf), "<RADAR:REAR,180.0,0.0>\n");
+	            HAL_UART_Transmit(&huart2, (uint8_t*)telemetry_buf, len, 15);
+	        }
 
-	  	      // 1. Drain the queue and segregate the freshest data per sensor
-	  	      while (osMessageQueueGet(TargetQueueHandle, &current_target, NULL, 0) == osOK)
-	  	      {
-	  	          if (current_target.src == SOURCE_VISION_C2) {
-	  	              latest_vision = current_target;
-	  	              vision_updated = true;
-	  	          } else if (current_target.src == SOURCE_RADAR_LD2452) {
-	  	              latest_radar = current_target;
-	  	              radar_updated = true;
-	  	          } else if (current_target.src == SOURCE_RADAR_BLINDSPOT) {
-	  	              latest_blindspot = current_target;
-	  	              blindspot_updated = true;
-	  	          }
-	  	      }
+	        // 2. Execute Sensor Priority Hierarchy
+	        if (vision_updated)
+	        {
+	            last_vision_tick = latest_vision.timestamp;
+	            pod_state = POD_STATE_TRACK;
+	            if (fabs(latest_vision.x_val) > DEADBAND_DEG) current_pan_angle += (latest_vision.x_val * 0.5f);
+	            if (fabs(latest_vision.y_val) > DEADBAND_DEG) current_tilt_angle += (latest_vision.y_val * 0.5f);
 
-	  	      // 2. Execute Sensor Priority Hierarchy
-	  	      if (vision_updated)
-	  	      {
-	  	          last_vision_tick = latest_vision.timestamp;
-	  	          pod_state = POD_STATE_TRACK;
+	            if (latest_vision.distance > 100.0f && latest_vision.distance < 2000.0f) {
+	                if ((osKernelGetTickCount() - last_fire_tick) > FIRE_COOLDOWN_MS) pod_state = POD_STATE_ENGAGE;
+	            }
+	        }
+	        else if (blindspot_updated && ((osKernelGetTickCount() - last_vision_tick) > VISION_TIMEOUT))
+	        {
+	            pod_state = POD_STATE_TRACK;
+	            current_pan_angle = (current_pan_angle >= 0.0f) ? 90.0f : -90.0f;
+	        }
+	        else if (radar_updated && ((osKernelGetTickCount() - last_vision_tick) > VISION_TIMEOUT))
+	        {
+	            last_radar_tick = latest_radar.timestamp;
+	            pod_state = POD_STATE_TRACK;
+	            if (fabs(latest_radar.x_val - current_pan_angle) > DEADBAND_DEG) current_pan_angle = latest_radar.x_val;
+	        }
 
-	  	        // Visual Servoing: Accumulate incremental offset with 0.5f damping to prevent oscillation
-	  	        if (fabs(latest_vision.x_val) > DEADBAND_DEG) {
-	  	        	current_pan_angle += (latest_vision.x_val * 0.5f);
-	  	        }
-	  	        if (fabs(latest_vision.y_val) > DEADBAND_DEG) {
-	  	            current_tilt_angle += (latest_vision.y_val * 0.5f);
-	  	        }
-	  	        if (latest_vision.distance > 100.0f && latest_vision.distance < 2000.0f) {
-	  	              if ((osKernelGetTickCount() - last_fire_tick) > FIRE_COOLDOWN_MS) {
-	  	                  pod_state = POD_STATE_ENGAGE;
-	  	              }
-	  	          }
-	  	      }
-	  	      else if (blindspot_updated && ((osKernelGetTickCount() - last_vision_tick) > VISION_TIMEOUT))
-	  	      {
-	  	          // Blindspot supersedes Front Radar if we have no visual lock
-	  	          pod_state = POD_STATE_TRACK;
-	  	          current_pan_angle = (current_pan_angle >= 0.0f) ? 90.0f : -90.0f;
-	  	      }
-	  	      else if (radar_updated && ((osKernelGetTickCount() - last_vision_tick) > VISION_TIMEOUT))
-	  	      {
-	  	          // Front Radar is the lowest priority fallback
-	  	          last_radar_tick = latest_radar.timestamp;
-	  	          pod_state = POD_STATE_TRACK;
+	        // 3. De-escalate to Search mode
+	        if ((osKernelGetTickCount() - last_vision_tick > SEARCH_TIMEOUT) &&
+	            (osKernelGetTickCount() - last_radar_tick > SEARCH_TIMEOUT)) {
+	            pod_state = POD_STATE_SEARCH;
+	        }
 
-	  	          if (fabs(latest_radar.x_val - current_pan_angle) > DEADBAND_DEG) {
-	  	              current_pan_angle = latest_radar.x_val;
-	  	          }
-	  	      }
+	        // --- KINEMATIC ENVELOPE CLAMPING ---
+	        if (current_pan_angle > 90.0f) current_pan_angle = 90.0f;
+	        if (current_pan_angle < -90.0f) current_pan_angle = -90.0f;
+	        if (current_tilt_angle > 45.0f) current_tilt_angle = 45.0f;
+	        if (current_tilt_angle < -15.0f) current_tilt_angle = -15.0f;
 
-	  	      // 3. De-escalate to Search mode on total signal loss
-	  	      if ((osKernelGetTickCount() - last_vision_tick > SEARCH_TIMEOUT) &&
-	  	          (osKernelGetTickCount() - last_radar_tick > SEARCH_TIMEOUT))
-	  	      {
-	  	          pod_state = POD_STATE_SEARCH;
-	  	      }
-
-	  	      // --- KINEMATIC ENVELOPE CLAMPING ---
-	  	      if (current_pan_angle > 90.0f) current_pan_angle = 90.0f;
-	  	      if (current_pan_angle < -90.0f) current_pan_angle = -90.0f;
-	  	      if (current_tilt_angle > 45.0f) current_tilt_angle = 45.0f;
-	  	      if (current_tilt_angle < -15.0f) current_tilt_angle = -15.0f;
-
-	  	    switch (pod_state)
-	  	    	  	      {
-	  	    	  	          case POD_STATE_SEARCH:
-	  	    	  	              current_pan_angle += (0.5f * sweep_direction);
-	  	    	  	              if (current_pan_angle >= 45.0f) {
-	  	    	  	                  sweep_direction = -1;
-	  	    	  	              } else if (current_pan_angle <= -45.0f) {
-	  	    	  	                  sweep_direction = 1;
-	  	    	  	              }
-	  	    	  	              pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
-	  	    	  	              tilt_target_steps = 0;
-	  	    	  	              break;
-
-	  	    	  	          case POD_STATE_TRACK:
-	  	    	  	              pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
-	  	    	  	              tilt_target_steps = (int32_t)(current_tilt_angle / 0.1125f);
-	  	    	  	              break;
-
-	  	    	  	          case POD_STATE_ENGAGE:
-	  	    	  	              pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
-	  	    	  	              tilt_target_steps = (int32_t)(current_tilt_angle / 0.1125f);
-
-	  	    	  	              osSemaphoreRelease(FireSemaphoreHandle);
-	  	    	  	              last_fire_tick = osKernelGetTickCount();
-	  	    	  	              pod_state = POD_STATE_TRACK;
-	  	    	  	              break;
-	  	    	  	      }
-
-	  	      osDelay(20);
-	  	  }
+	        switch (pod_state)
+	        {
+	            case POD_STATE_SEARCH:
+	                current_pan_angle += (0.5f * sweep_direction);
+	                if (current_pan_angle >= 45.0f) sweep_direction = -1;
+	                else if (current_pan_angle <= -45.0f) sweep_direction = 1;
+	                pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
+	                tilt_target_steps = 0;
+	                break;
+	            case POD_STATE_TRACK:
+	                pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
+	                tilt_target_steps = (int32_t)(current_tilt_angle / 0.1125f);
+	                break;
+	            case POD_STATE_ENGAGE:
+	                pan_target_steps = (int32_t)(current_pan_angle / 0.1125f);
+	                tilt_target_steps = (int32_t)(current_tilt_angle / 0.1125f);
+	                osSemaphoreRelease(FireSemaphoreHandle);
+	                last_fire_tick = osKernelGetTickCount();
+	                pod_state = POD_STATE_TRACK;
+	                break;
+	        }
+	        osDelay(20);
+	    }
   /* USER CODE END StartDefaultTask */
 }
 
@@ -341,41 +340,25 @@ CommTask thread (Parses C2 Vision Strings).
 void StartTask02(void *argument)
 {
   /* USER CODE BEGIN StartTask02 */
-	  extern uint8_t c2_ping_pong[2][32];
-	  float parsed_x, parsed_y, parsed_z;
+	extern uint8_t c2_ping_pong[2][32];
+	    float parsed_x, parsed_y, parsed_z;
 
-	  for(;;)
-	  {
-	      uint32_t flags = osThreadFlagsWait(0x03, osFlagsWaitAny, osWaitForever);
-
-	      if (flags & 0x01)
-	      {
-	    	  if (sscanf((char*)c2_ping_pong[0], "<X%fY%fZ%f>", &parsed_x, &parsed_y, &parsed_z) == 3) {
-	              TargetData_t vision_target = {
-	                  .x_val = parsed_x,
-	                  .y_val = parsed_y,
-	                  .distance = parsed_z,
-	                  .timestamp = osKernelGetTickCount(),
-	                  .src = SOURCE_VISION_C2
-	              };
-	              osMessageQueuePut(TargetQueueHandle, &vision_target, 0, 0);
-	          }
-	      }
-
-	      if (flags & 0x02)
-	      {
-	    	  if (sscanf((char*)c2_ping_pong[1], "<X%fY%fZ%f>", &parsed_x, &parsed_y, &parsed_z) == 3) {
-	              TargetData_t vision_target = {
-	                  .x_val = parsed_x,
-	                  .y_val = parsed_y,
-	                  .distance = parsed_z,
-	                  .timestamp = osKernelGetTickCount(),
-	                  .src = SOURCE_VISION_C2
-	              };
-	              osMessageQueuePut(TargetQueueHandle, &vision_target, 0, 0);
-	          }
-	      }
-	  }
+	    for(;;)
+	    {
+	        uint32_t flags = osThreadFlagsWait(0x03, osFlagsWaitAny, osWaitForever);
+	        if (flags & 0x01) {
+	            if (sscanf((char*)c2_ping_pong[0], "<X%fY%fZ%f>", &parsed_x, &parsed_y, &parsed_z) == 3) {
+	                TargetData_t vision_target = { parsed_x, parsed_y, parsed_z, osKernelGetTickCount(), SOURCE_VISION_C2 };
+	                osMessageQueuePut(TargetQueueHandle, &vision_target, 0, 0);
+	            }
+	        }
+	        if (flags & 0x02) {
+	            if (sscanf((char*)c2_ping_pong[1], "<X%fY%fZ%f>", &parsed_x, &parsed_y, &parsed_z) == 3) {
+	                TargetData_t vision_target = { parsed_x, parsed_y, parsed_z, osKernelGetTickCount(), SOURCE_VISION_C2 };
+	                osMessageQueuePut(TargetQueueHandle, &vision_target, 0, 0);
+	            }
+	        }
+	    }
   /* USER CODE END StartTask02 */
 }
 
@@ -387,145 +370,150 @@ void StartTask02(void *argument)
 void StartTask03(void *argument)
 {
   /* USER CODE BEGIN StartTask03 */
-  /* Infinite loop */
-	for(;;)
-	  {
-	      // Wait indefinitely until the ControlTask gives the order to fire
-	      if (osSemaphoreAcquire(FireSemaphoreHandle, osWaitForever) == osOK)
-	      {
-	          // 1. Pull GPIO HIGH to fire the 12V payload (Laser/Net)
-	          // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
-
-	          // 2. Wait for physical actuation (150 ms)
-	          osDelay(150);
-
-	          // 3. Turn it off
-	          // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
-	      }
-	  }
+    for(;;)
+    {
+        if (osSemaphoreAcquire(FireSemaphoreHandle, osWaitForever) == osOK)
+        {
+            // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET);
+            osDelay(150);
+            // HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
+        }
+    }
   /* USER CODE END StartTask03 */
 }
 
 /* USER CODE BEGIN Header_StartTask04 */
 /**
-* @brief Function implementing the PositionTask thread (Slip Recovery & I2C Fault Detect).
+* @brief Function implementing the TelemetryTask thread (Dual-Axis Slip Recovery).
 */
 /* USER CODE END Header_StartTask04 */
 void StartTask04(void *argument)
 {
   /* USER CODE BEGIN StartTask04 */
-	extern I2C_HandleTypeDef hi2c1;
-	  extern volatile int32_t pan_current_steps;
-	  extern volatile int32_t pan_target_steps; // Added so we can halt the motor
+    extern I2C_HandleTypeDef hi2c1;
+    extern I2C_HandleTypeDef hi2c2;
 
-	  const uint16_t AS5600_ADDR = 0x36 << 1;
-	  uint8_t i2c_buf[2];
-	  uint8_t as5600_fault_counter = 0;
+    extern volatile int32_t pan_current_steps;
+    extern volatile int32_t pan_target_steps;
 
-	  for(;;)
-	  {
-	      if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf, 2, 10) == HAL_OK)
-	      {
-	          as5600_fault_counter = 0; // Hardware is healthy, reset counter
+    extern volatile int32_t tilt_current_steps;
+    extern volatile int32_t tilt_target_steps;
 
-	          uint16_t raw_angle = (i2c_buf[0] << 8) | i2c_buf[1];
-	          float true_physical_angle = ((float)raw_angle * 360.0f) / 4096.0f - 180.0f;
+    const uint16_t AS5600_ADDR = 0x36 << 1;
+    uint8_t i2c_buf_pan[2];
+    uint8_t i2c_buf_tilt[2];
+    uint8_t as5600_fault_counter = 0;
+    uint8_t as5600_fault_counter_tilt = 0;
 
-	          // Convert physical degrees to expected motor steps (1/16th microstepping)
-	          int32_t true_physical_steps = (int32_t)(true_physical_angle / 0.1125f);
+    for(;;)
+    {
+        // --- 1. PAN AXIS (I2C1) ---
+        if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf_pan, 2, 10) == HAL_OK)
+        {
+            as5600_fault_counter = 0;
+            uint16_t raw_angle = (i2c_buf_pan[0] << 8) | i2c_buf_pan[1];
+            float true_physical_angle = ((float)raw_angle * 360.0f) / 4096.0f - 180.0f;
+            int32_t true_physical_steps = (int32_t)(true_physical_angle / 0.1125f);
 
-	          // 2. Closed-Loop Correction (Only trigger if slip is > 3 steps to prevent jitter)
-	          if (abs(true_physical_steps - pan_current_steps) > 3)
-	          	 {
-	          	  // RTOS-Safe Critical Section
-	          	  taskENTER_CRITICAL();
-	          	  pan_current_steps = true_physical_steps;
-	          	  taskEXIT_CRITICAL();
-	          	  }
-	      }
-	      else
-	      {
-	          // FAULT DETECTION: I2C line dropped a packet
-	          as5600_fault_counter++;
+            if (abs(true_physical_steps - pan_current_steps) > 3) {
+                taskENTER_CRITICAL();
+                pan_current_steps = true_physical_steps;
+                taskEXIT_CRITICAL();
+            }
+        }
+        	else {
+                    as5600_fault_counter++;
+                    if (as5600_fault_counter > 10) {
+                        pan_target_steps = pan_current_steps; // Safely lock the motor
 
-	          if (as5600_fault_counter > 10)
-	          {
-	              // FAULT COUNTER-MEASURE: 200ms of silence. The encoder is dead.
-	              // Lock the motor to its current step count to prevent a blind physical crash.
-	              pan_target_steps = pan_current_steps;
-	          }
-	      }
+                        // Hardware Reboot the I2C1 Bus to clear the lockup
+                        HAL_I2C_DeInit(&hi2c1);
+                        HAL_I2C_Init(&hi2c1);
+                        as5600_fault_counter = 0; // Reset counter to try reading again
+                    }
+                }
 
-	      osDelay(20);
-	  }
+        // --- 2. TILT AXIS (I2C2) ---
+        if (HAL_I2C_Mem_Read(&hi2c2, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, i2c_buf_tilt, 2, 10) == HAL_OK)
+        {
+            uint16_t raw_angle_tilt = (i2c_buf_tilt[0] << 8) | i2c_buf_tilt[1];
+            float true_physical_angle_tilt = ((float)raw_angle_tilt * 360.0f) / 4096.0f - 180.0f;
+            int32_t true_physical_steps_tilt = (int32_t)(true_physical_angle_tilt / 0.1125f);
+
+            if (abs(true_physical_steps_tilt - tilt_current_steps) > 3) {
+                taskENTER_CRITICAL();
+                tilt_current_steps = true_physical_steps_tilt;
+                taskEXIT_CRITICAL();
+            }
+        }else {
+            // (You will need to define a separate as5600_fault_counter_tilt variable at the top of the task)
+            as5600_fault_counter_tilt++;
+            if (as5600_fault_counter_tilt > 10) {
+                tilt_target_steps = tilt_current_steps; // Safely lock the motor
+
+                // Hardware Reboot the I2C2 Bus to clear the lockup
+                HAL_I2C_DeInit(&hi2c2);
+                HAL_I2C_Init(&hi2c2);
+                as5600_fault_counter_tilt = 0;
+            }
+        }
+
+        osDelay(20);
+    }
   /* USER CODE END StartTask04 */
 }
 
 /* USER CODE BEGIN Header_StartTask05 */
 /**
 * @brief Function implementing the ThermalTask thread.
-* @param argument: Not used
-* @retval None
 */
 /* USER CODE END Header_StartTask05 */
 void StartTask05(void *argument)
 {
   /* USER CODE BEGIN StartTask05 */
-	extern ADC_HandleTypeDef hadc1;
+    extern ADC_HandleTypeDef hadc1;
+    const float SERIES_RESISTOR = 10000.0f;
+    const float NOMINAL_RESISTANCE = 10000.0f;
+    const float NOMINAL_TEMP = 25.0f;
+    const float BETA_COEFFICIENT = 3950.0f;
 
-		  // 10k NTC Thermistor Parameters
-		  const float SERIES_RESISTOR = 10000.0f;
-		  const float NOMINAL_RESISTANCE = 10000.0f;
-		  const float NOMINAL_TEMP = 25.0f;
-		  const float BETA_COEFFICIENT = 3950.0f;
+    float current_temp_c = 25.0f;
+    bool heater_is_on = false;
 
-		  float current_temp_c = 25.0f;
-		  bool heater_is_on = false;
+    for(;;)
+    {
+        HAL_ADC_Start(&hadc1);
+        if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+        {
+            uint32_t adc_value = HAL_ADC_GetValue(&hadc1);
+            if (adc_value > 50 && adc_value < 4050) {
+                float resistance = SERIES_RESISTOR * ((4095.0f / (float)adc_value) - 1.0f);
+                float steinhart = resistance / NOMINAL_RESISTANCE;
+                steinhart = log(steinhart);
+                steinhart /= BETA_COEFFICIENT;
+                steinhart += 1.0f / (NOMINAL_TEMP + 273.15f);
+                steinhart = 1.0f / steinhart;
+                current_temp_c = steinhart - 273.15f;
+            } else {
+                heater_is_on = false;
+                current_temp_c = 25.0f;
+            }
+        }
+        HAL_ADC_Stop(&hadc1);
 
-		  for(;;)
-		  {
-		      HAL_ADC_Start(&hadc1);
-		      if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
-		      {
-		          uint32_t adc_value = HAL_ADC_GetValue(&hadc1);
+        if (current_temp_c < 5.0f && !heater_is_on && current_temp_c != 25.0f) heater_is_on = true;
+        else if (current_temp_c > 15.0f && heater_is_on) heater_is_on = false;
 
-		          if (adc_value > 50 && adc_value < 4050)
-		          {
-		              float resistance = SERIES_RESISTOR * ((4095.0f / (float)adc_value) - 1.0f);
-		              float steinhart = resistance / NOMINAL_RESISTANCE;
-		              steinhart = log(steinhart);
-		              steinhart /= BETA_COEFFICIENT;
-		              steinhart += 1.0f / (NOMINAL_TEMP + 273.15f);
-		              steinhart = 1.0f / steinhart;
-		              current_temp_c = steinhart - 273.15f;
-		          }
-		          else
-		          {
-		              // FAULT: Thermistor broken. Kill heater.
-		              heater_is_on = false;
-		              current_temp_c = 25.0f;
-		          }
-		      }
-		      HAL_ADC_Stop(&hadc1);
-
-		      // Bang-Bang Hysteresis Toggle
-		      if (current_temp_c < 5.0f && !heater_is_on && current_temp_c != 25.0f) {
-		          heater_is_on = true;
-		      } else if (current_temp_c > 15.0f && heater_is_on) {
-		          heater_is_on = false;
-		      }
-
-		      // 50% SOFTWARE PWM: Prevents 5A Power Supply Brownout
-		      if (heater_is_on) {
-		          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
-		          osDelay(500); // ON for 500ms
-		          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
-		          osDelay(500); // OFF for 500ms
-		      } else {
-		          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
-		          osDelay(1000); // Stay OFF
-		      }
-		  }
+        if (heater_is_on) {
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+            osDelay(500);
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+            osDelay(500);
+        } else {
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+            osDelay(1000);
+        }
+    }
   /* USER CODE END StartTask05 */
 }
 
