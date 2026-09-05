@@ -152,6 +152,7 @@ class CVInterface:
                     display=False,
                     loop_video=True,
                     stop_event=self._vision_stop,
+                    detection_interval=1,
                 )
 
             except Exception as exc:
@@ -205,6 +206,7 @@ class CVInterface:
                     display=False,
                     loop_video=False,
                     stop_event=self._vision_stop,
+                    detection_interval=1,
                 )
 
             except Exception as exc:

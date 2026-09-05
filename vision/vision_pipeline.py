@@ -5,6 +5,7 @@ import time
 import argparse
 import sys
 import serial
+import serial.tools.list_ports
 import threading
 import json
 import os
@@ -44,8 +45,32 @@ current_mcu_lock = 0
 last_telemetry_time = 0
 
 # Serial communication configuration
-TELEMETRY_TX_INTERVAL = 0.1  # Limit output to 10 Hz (100 ms)
+TELEMETRY_TX_INTERVAL = 0.02  # 50 Hz (20 ms) streaming rate matching ESP32 PWM engine
+DEADZONE_PX = 15              # Deadzone threshold in pixels (|ΔX| <= 15 holds steady)
 last_tx_time = 0
+
+def find_esp32_port():
+    """Auto-detect USB serial port for ESP32-S3 while filtering out Bluetooth ports."""
+    try:
+        def is_bluetooth(p):
+            text = (p.description + " " + p.device + " " + (p.hwid or "")).lower()
+            return any(b in text for b in ["bluetooth", "bth", "bthenum"])
+
+        # 1. Prefer known USB-to-UART bridge chips (CH34x, CP210x, FTDI, ESP, USB Serial)
+        for p in serial.tools.list_ports.comports():
+            if is_bluetooth(p):
+                continue
+            text = (p.description + " " + p.device + " " + (p.hwid or "")).lower()
+            if any(k in text for k in ["ch34", "cp21", "usb", "uart", "esp", "ftdi", "silicon labs"]):
+                return p.device
+
+        # 2. Fallback to any non-Bluetooth COM port
+        for p in serial.tools.list_ports.comports():
+            if not is_bluetooth(p):
+                return p.device
+    except Exception:
+        pass
+    return None
 
 # ==========================================
 # 2. Mock Serial Class (For Testing without HW)
@@ -55,24 +80,30 @@ class DummySerial:
         self.port = port
         self.baud = baud
         self.is_open = True
+        self.last_print_time = 0
         print(f"[MOCK SERIAL] Initialized loopback connection on virtual port '{port}' at {baud} baud.")
 
     def write(self, data):
-        # Decode and print command to terminal
-        try:
-            cmd = data.decode('ascii').strip()
-            print(f"[MOCK SERIAL SEND] {cmd}")
-        except Exception:
-            pass
+        # Throttle command print to ~2 Hz to prevent console flooding at 50 Hz
+        now = time.time()
+        if now - self.last_print_time >= 0.5:
+            try:
+                cmd = data.decode('utf-8', errors='ignore').strip()
+                print(f"[MOCK SERIAL SEND] {cmd}")
+            except Exception:
+                pass
+            self.last_print_time = now
 
     def read_line(self):
         # Emulate receiving telemetry JSON from STM32
         time.sleep(0.1)  # Simulate 10 Hz rate
         mock_temp = 25.0 - (time.time() % 40)  # Emulate temperature changes down into negative
+        p_val = float(current_mcu_pan) if isinstance(current_mcu_pan, (int, float)) else 0.0
+        t_val = float(current_mcu_tilt) if isinstance(current_mcu_tilt, (int, float)) else 0.0
         mock_data = {
             "t": int(time.time() * 1000) & 0xFFFFFF,
-            "p": round(current_mcu_pan + np.random.uniform(-0.1, 0.1), 2),
-            "tlt": round(current_mcu_tilt + np.random.uniform(-0.1, 0.1), 2),
+            "p": round(p_val + np.random.uniform(-0.1, 0.1), 2),
+            "tlt": round(t_val + np.random.uniform(-0.1, 0.1), 2),
             "tmp": round(mock_temp, 1),
             "lck": current_mcu_lock
         }
@@ -203,30 +234,69 @@ def serial_reader_thread(ser):
                 break
             line = ser.readline()
             if line:
-                # Parse incoming JSON from STM32
-                data = json.loads(line.decode('ascii').strip())
-                current_mcu_pan = data.get("p", current_mcu_pan)
-                current_mcu_tilt = data.get("tlt", current_mcu_tilt)
-                current_mcu_temp = data.get("tmp", current_mcu_temp)
-                current_mcu_lock = data.get("lck", current_mcu_lock)
-                last_telemetry_time = time.time()
+                # Parse incoming JSON from STM32 / ESP32
+                raw_str = line.decode('utf-8', errors='ignore').strip()
+                if raw_str.startswith("{") and raw_str.endswith("}"):
+                    data = json.loads(raw_str)
+                    if isinstance(data, dict):
+                        # Extract pan only if numeric
+                        for k in ("p", "pan"):
+                            if k in data:
+                                try:
+                                    current_mcu_pan = float(data[k])
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Extract tilt only if numeric
+                        for k in ("tlt", "tilt"):
+                            if k in data:
+                                try:
+                                    current_mcu_tilt = float(data[k])
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Extract temperature only if numeric
+                        for k in ("tmp", "temp", "temperature"):
+                            if k in data:
+                                try:
+                                    current_mcu_temp = float(data[k])
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+
+                        # Extract lock only if valid int/bool
+                        for k in ("lck", "lock"):
+                            if k in data:
+                                try:
+                                    current_mcu_lock = int(data[k])
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+
+                        last_telemetry_time = time.time()
         except Exception:
-            time.sleep(0.1)  # Ignore parse/read errors during disconnects
+            time.sleep(0.05)
 
 # ==========================================
 # 4. Main Perception Pipeline
 # ==========================================
 def run_perception_pipeline(
     source_path,
-    serial_port,
-    baud_rate,
-    use_yolo,
+    serial_port="auto",
+    baud_rate=115200,
+    use_yolo=True,
     weights_path="yolov8n.pt",
     dashboard_callback=None,
     enable_serial=True,
     display=True,
     loop_video=False,
     stop_event=None,
+    detection_interval=1,
+    cam_width=640,
+    cam_height=480,
+    deadzone=15,
 ):
     global last_tx_time, current_system_state, current_mcu_lock
     global FOCAL_LENGTH_X, FOCAL_LENGTH_Y, CENTER_X, CENTER_Y
@@ -248,17 +318,23 @@ def run_perception_pipeline(
         print(f"[VISION] No calibration file '{calib_file}' found. Using default camera parameters.")
     
     # 4.1. Initialize Serial Link
-    # Dashboard integration mode disables serial because the dashboard uses
-    # its own mock STM32 data. Standalone/real mode keeps serial behavior.
     ser = None
     if enable_serial:
+        target_port = serial_port
+        if target_port in ("auto", "AUTO", "/dev/ttyUSB0", None):
+            detected = find_esp32_port()
+            if detected:
+                target_port = detected
+                print(f"[SERIAL] Auto-detected Gimbal controller on port '{target_port}'.")
+
         try:
-            ser = serial.Serial(serial_port, baud_rate, timeout=1.0)
-            print(f"[SERIAL] Connected to physical port '{serial_port}' at {baud_rate} baud.")
+            ser = serial.Serial(target_port, baud_rate, timeout=0.05)
+            time.sleep(1.0)
+            print(f"[SERIAL] Connected to physical port '{target_port}' at {baud_rate} baud.")
         except Exception as e:
-            print(f"[SERIAL WARNING] Could not connect to physical port '{serial_port}': {e}")
+            print(f"[SERIAL WARNING] Could not connect to physical port '{target_port}': {e}")
             print("[SERIAL WARNING] Falling back to DummySerial loopback mode.")
-            ser = DummySerial(serial_port, baud_rate)
+            ser = DummySerial(target_port, baud_rate)
 
         reader = threading.Thread(target=serial_reader_thread, args=(ser,), daemon=True)
         reader.start()
@@ -315,36 +391,38 @@ def run_perception_pipeline(
     tracking_active = False
     target_label = "TARGET"
     
-    # Auto-adjust detection interval based on GPU capability
-    if use_yolo:
-        if device == 'cuda':
-            detection_interval = 1  # Run YOLO on every frame on GPU (extremely fast, ~5ms)
-            print("[VISION] GPU detected. Running YOLOv8 detection on every frame for zero-drift.")
-        else:
-            detection_interval = 10  # Use KCF tracker on CPU to save cycles
-            print("[VISION] CPU mode. Running YOLOv8 every 10 frames + KCF tracker for low latency.")
-    else:
+    # Detection interval configuration (run YOLO on every frame when interval=1)
+    if not use_yolo:
         detection_interval = 10
+    else:
+        detection_interval = 1 if detection_interval is None else int(detection_interval)
+        print(f"[VISION] Detection interval set to {detection_interval}. Running YOLOv8 on every frame for zero-drift.")
         
     frame_counter = 0
 
     # 4.3. Initialize Video Feed
     print(f"[VISION] Opening video source: '{source_path}'")
-    cap = cv2.VideoCapture(source_path)
-    
-    # Set video resolution (forces 1080p if webcam supports it)
     if isinstance(source_path, int):
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        cap = cv2.VideoCapture(source_path, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(source_path)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
+        # Flush initial frames to let camera sensor stabilize
+        for _ in range(5):
+            cap.read()
+    else:
+        cap = cv2.VideoCapture(source_path)
         
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or cam_width
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or cam_height
     fps = cap.get(cv2.CAP_PROP_FPS)
     print(f"[VISION] Stream resolution: {width}x{height} @ {fps:.1f} FPS")
 
-    # Update calibration constants to match actual frame size if not 1080p
+    # Update calibration constants to match actual frame size
     CENTER_X = width / 2.0
     CENTER_Y = height / 2.0
+    DEADZONE_PX = deadzone
 
     # Initialize Sensor Fusion components
     dt_val = 1.0 / fps if (fps and fps > 0) else 0.033
@@ -356,6 +434,7 @@ def run_perception_pipeline(
     if display:
         cv2.namedWindow("SIH26050 - Tactical Commander HUD", cv2.WINDOW_NORMAL)
 
+    consecutive_drops = 0
     while cap.isOpened():
         if stop_event is not None and stop_event.is_set():
             print("[VISION] Stop requested by dashboard.")
@@ -363,12 +442,17 @@ def run_perception_pipeline(
 
         start_frame_time = time.time()
         ret, frame = cap.read()
-        if not ret:
+        if not ret or frame is None:
             if loop_video and not isinstance(source_path, int):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
-            print("[VISION] End of stream or empty frame received.")
-            break
+            consecutive_drops += 1
+            if consecutive_drops > 30:
+                print("[VISION] End of stream or camera disconnected.")
+                break
+            time.sleep(0.02)
+            continue
+        consecutive_drops = 0
             
         frame_counter += 1
         bbox = None
@@ -383,16 +467,16 @@ def run_perception_pipeline(
             classes = results.boxes.cls.cpu().numpy()
             confidences = results.boxes.conf.cpu().numpy()
 
-            ALLOWED_CLASS_NAMES = {"person", "airplane", "bird", "cell phone", "drone", "quadcopter", "fixed-wing"}
+            ALLOWED_CLASS_NAMES = {"person", "airplane", "aeroplane", "bird", "cell phone", "drone", "quadcopter", "fixed-wing", "sports ball"}
             best_idx = -1
             best_conf = 0.0
             for idx, conf in enumerate(confidences):
                 class_id = int(classes[idx])
                 class_name = model.names[class_id]
-                if class_name.lower() in ALLOWED_CLASS_NAMES and conf > 0.5:
-                    best_idx = idx
-                    best_conf = conf
-                    break
+                if (class_name.lower() in ALLOWED_CLASS_NAMES or conf > 0.60) and conf > 0.35:
+                    if conf > best_conf:
+                        best_idx = idx
+                        best_conf = conf
 
             if best_idx != -1:
                 x1, y1, x2, y2 = boxes[best_idx]
@@ -465,74 +549,92 @@ def run_perception_pipeline(
             # If no target seen at all, let Kalman filter predict and update *only* if radar still updates
             kf.predict(current_time)
             
-        # 4.6. Calculate Gimbal Output Coordinates from Fused Kalman State
-        pan_err = 0.0
-        tilt_err = 0.0
-        target_distance = 0.0
-        
-        if kf.initialized:
+        # 4.6. Calculate Exact Pixel Error Coordinates (Project Zero Protocol)
+        err_x = 0
+        err_y = 0
+        u = None
+        v = None
+        target_locked = False
+
+        if target_found and bbox is not None and not occlusion_active:
+            tx, ty, tw, th = bbox
+            u = int(tx + tw / 2.0)
+            v = int(ty + th / 2.0)
+            err_x = int(u - CENTER_X)
+            err_y = int(v - CENTER_Y)
+            target_locked = True
+            current_system_state = STATE_LOCKED if abs(err_x) <= DEADZONE_PX else STATE_TRACKING
+            current_mcu_lock = 1 if abs(err_x) <= DEADZONE_PX else 0
+        elif occlusion_active and kf.initialized:
+            # During visual loss, predict screen pixel coordinates from 3D Kalman State
             x_fused, y_fused, z_fused = kf.get_position()
-            
-            # Angle offsets in degrees
-            pan_err = np.arctan(x_fused / max(0.1, z_fused)) * (180.0 / np.pi)
-            tilt_err = -np.arctan(y_fused / max(0.1, z_fused)) * (180.0 / np.pi)
-            target_distance = round(z_fused, 2)
-            
+            u_fused = (x_fused * FOCAL_LENGTH_X) / max(0.1, z_fused) + CENTER_X
+            v_fused = (y_fused * FOCAL_LENGTH_Y) / max(0.1, z_fused) + CENTER_Y
+            u = int(u_fused)
+            v = int(v_fused)
+            err_x = int(u - CENTER_X)
+            err_y = int(v - CENTER_Y)
+            target_locked = True
             current_system_state = STATE_TRACKING
-            if abs(pan_err) < 2.0 and abs(tilt_err) < 2.0:
-                current_system_state = STATE_LOCKED
-                current_mcu_lock = 1
-            else:
-                current_mcu_lock = 0
-                
-            # Safety timeout: if target gets too far or lost, reset initialization
-            if z_fused > 100.0 or z_fused <= 0.1:
-                kf.initialized = False
+            current_mcu_lock = 0
         else:
             current_system_state = STATE_IDLE
             current_mcu_lock = 0
 
-        # 4.7. Send Telemetry to STM32 at 10 Hz
-        if enable_serial and ser is not None and current_time - last_tx_time >= TELEMETRY_TX_INTERVAL:
-            serial_command = f"X{pan_err:+.2f}Y{tilt_err:+.2f}Z{target_distance:.2f}\n"
-            ser.write(serial_command.encode('ascii'))
+        # Calculate 3D target distance and angle errors (for telemetry/HUD)
+        pan_err = 0.0
+        tilt_err = 0.0
+        target_distance = 0.0
+        if kf.initialized:
+            x_fused, y_fused, z_fused = kf.get_position()
+            pan_err = np.arctan(x_fused / max(0.1, z_fused)) * (180.0 / np.pi)
+            tilt_err = -np.arctan(y_fused / max(0.1, z_fused)) * (180.0 / np.pi)
+            target_distance = round(z_fused, 2)
+            if z_fused > 100.0 or z_fused <= 0.1:
+                kf.initialized = False
+
+        # 4.7. Send Packet to ESP32 Gimbal Controller at 50 Hz (<X:%d,Y:%d>\n)
+        if enable_serial and ser is not None and (current_time - last_tx_time >= TELEMETRY_TX_INTERVAL):
+            serial_command = f"<X:{err_x},Y:{err_y}>\n"
+            ser.write(serial_command.encode('utf-8'))
             last_tx_time = current_time
 
         # 4.8. Draw HUD overlays
-        # Center reference crosshairs
-        cv2.drawMarker(frame, (int(CENTER_X), int(CENTER_Y)), (0, 255, 0), cv2.MARKER_CROSS, 40, 2)
-        cv2.circle(frame, (int(CENTER_X), int(CENTER_Y)), 10, (0, 255, 0), 1)
+        # Center reference crosshairs with 15px deadzone circle
+        in_deadzone = target_locked and (abs(err_x) <= DEADZONE_PX)
+        crosshair_color = (0, 255, 0) if in_deadzone else ((0, 255, 255) if target_locked else (0, 165, 255))
+        cv2.drawMarker(frame, (int(CENTER_X), int(CENTER_Y)), crosshair_color, cv2.MARKER_CROSS, 25, 2)
+        cv2.circle(frame, (int(CENTER_X), int(CENTER_Y)), DEADZONE_PX, (0, 255, 0), 1)
 
-        # Draw camera visual tracking box (if active and not occluded)
-        if target_found and bbox is not None and not occlusion_active:
+        # Draw camera visual tracking box, center dot, and tracking vector line
+        if target_locked and u is not None and v is not None and bbox is not None and not occlusion_active:
             tx, ty, tw, th = bbox
-            cv2.rectangle(frame, (int(tx), int(ty)), (int(tx+tw), int(ty+th)), (0, 255, 255), 2)
-            cv2.putText(frame, f"{target_label} [CAM]", (int(tx), int(ty - 10)), 
+            cv2.rectangle(frame, (int(tx), int(ty)), (int(tx + tw), int(ty + th)), (0, 0, 255), 2)
+            cv2.circle(frame, (u, v), 5, (0, 0, 255), -1)
+            cv2.line(frame, (int(CENTER_X), int(CENTER_Y)), (u, v), (0, 255, 255), 2)
+            cv2.putText(frame, f"{target_label} (u:{u}, v:{v})", (int(tx), max(20, int(ty - 10))), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
         # Draw Fused Kalman/Radar target tracking indicator
         if kf.initialized:
             x_fused, y_fused, z_fused = kf.get_position()
-            u_fused = (x_fused * FOCAL_LENGTH_X) / z_fused + CENTER_X
-            v_fused = (y_fused * FOCAL_LENGTH_Y) / z_fused + CENTER_Y
+            u_fused = (x_fused * FOCAL_LENGTH_X) / max(0.1, z_fused) + CENTER_X
+            v_fused = (y_fused * FOCAL_LENGTH_Y) / max(0.1, z_fused) + CENTER_Y
             
             # Map physical Z to a bounding box size on screen
-            box_sz = max(20, int(100.0 * (15.0 / z_fused)))
+            box_sz = max(20, int(100.0 * (15.0 / max(0.1, z_fused))))
             fx1 = int(u_fused - box_sz/2)
             fy1 = int(v_fused - box_sz/2)
             
             # Draw dotted box for Fused Target (Orange)
-            fused_color = (0, 165, 255) if not occlusion_active else (30, 144, 255) # Orange or Dodger Blue
+            fused_color = (0, 165, 255) if not occlusion_active else (30, 144, 255)
             
-            # Dotted rectangle using OpenCV line function
             def draw_dotted_rect(img, p1, p2, color, thickness=1, gap=5):
                 rx1, ry1 = p1
                 rx2, ry2 = p2
-                # horizontal lines
                 for rx in range(rx1, rx2, gap * 2):
                     cv2.line(img, (rx, ry1), (min(rx + gap, rx2), ry1), color, thickness)
                     cv2.line(img, (rx, ry2), (min(rx + gap, rx2), ry2), color, thickness)
-                # vertical lines
                 for ry in range(ry1, ry2, gap * 2):
                     cv2.line(img, (rx1, ry), (rx1, min(ry + gap, ry2)), color, thickness)
                     cv2.line(img, (rx2, ry), (rx2, min(ry + gap, ry2)), color, thickness)
@@ -553,45 +655,39 @@ def run_perception_pipeline(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 3)
 
         # Draw Tactical Information panel on top-left
-        hud_bg = np.zeros((215, 360, 3), dtype=np.uint8)
-        frame[10:225, 10:370] = cv2.addWeighted(frame[10:225, 10:370], 0.4, hud_bg, 0.6, 0.0)
+        hud_bg = np.zeros((225, 380, 3), dtype=np.uint8)
+        frame[10:235, 10:390] = cv2.addWeighted(frame[10:235, 10:390], 0.4, hud_bg, 0.6, 0.0)
         
-        cv2.putText(frame, "SIH26050 COUNTER-UAS C2 HUD", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        cv2.putText(frame, "-------------------------", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(frame, "PROJECT ZERO - OPTICAL TRACKING HUD", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(frame, "------------------------------------", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
-        state_color = (0, 0, 255) if current_system_state == STATE_LOCKED else (0, 255, 255)
-        cv2.putText(frame, f"SYSTEM STATE: {STATE_NAMES[current_system_state]}", (20, 70), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, state_color, 2)
+        status_text = "LOCKED (DEADZONE)" if in_deadzone else ("TRACKING TARGET" if target_locked else "SEARCHING...")
+        cv2.putText(frame, f"STATUS      : {status_text}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, crosshair_color, 2)
         
-        fusion_status = "ACTIVE [RADAR ONLY]" if occlusion_active else ("ACTIVE [CAM+RADAR]" if kf.initialized else "STANDBY")
-        fusion_color = (30, 144, 255) if occlusion_active else ((0, 255, 0) if kf.initialized else (128, 128, 128))
-        cv2.putText(frame, f"SENSOR FUSION: {fusion_status}", (20, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, fusion_color, 2)
-                    
-        cv2.putText(frame, f"TARGET ERROR: P:{pan_err:+.2f} deg | T:{tilt_err:+.2f} deg", (20, 115), 
+        err_color = (0, 255, 0) if target_locked else (128, 128, 128)
+        cv2.putText(frame, f"TARGET ERROR: ΔX:{err_x:+d}px | ΔY:{err_y:+d}px", (20, 95), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, err_color, 2)
+        cv2.putText(frame, f"GIMBAL TX   : <X:{err_x},Y:{err_y}> (50Hz)", (20, 120), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        cv2.putText(frame, f"OPTICAL CTR : ({int(CENTER_X)}, {int(CENTER_Y)}) | DZ: {DEADZONE_PX}px", (20, 145), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(frame, f"MCU ENCODER : P:{current_mcu_pan:+.2f} deg | T:{current_mcu_tilt:+.2f} deg", (20, 140), 
+        pan_disp = float(current_mcu_pan) if isinstance(current_mcu_pan, (int, float)) else 0.0
+        tilt_disp = float(current_mcu_tilt) if isinstance(current_mcu_tilt, (int, float)) else 0.0
+        cv2.putText(frame, f"MCU ENCODER : P:{pan_disp:+.2f} deg | T:{tilt_disp:+.2f} deg", (20, 170), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
-        # Display temperature from NTC thermistor and warning if cryogenic
-        temp_color = (0, 255, 255) if current_mcu_temp < 5.0 else (0, 255, 0)
-        if current_mcu_temp < 0.0:
-            temp_color = (0, 0, 255)
-            cv2.putText(frame, f"PTC HEATER  : ACTIVE [COLD SHOCK]", (20, 195), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        else:
-            cv2.putText(frame, f"PTC HEATER  : STANDBY", (20, 195), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            
-        cv2.putText(frame, f"AMBIENT TEMP: {current_mcu_temp:+.1f} C", (20, 165), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, temp_color, 2)
+        # Display temperature from NTC thermistor
+        temp_disp = float(current_mcu_temp) if isinstance(current_mcu_temp, (int, float)) else 25.0
+        temp_color = (0, 255, 255) if temp_disp < 5.0 else (0, 255, 0)
+        cv2.putText(frame, f"AMBIENT TEMP: {temp_disp:+.1f} C", (20, 195), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, temp_color, 1)
 
         # Performance / Latency readout
         latency_ms = (time.time() - start_frame_time) * 1000.0
         cv2.putText(frame, f"LATENCY: {latency_ms:.1f} ms", (width - 160, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        # Publish processed output to the dashboard when requested.
+    # Publish processed output to the dashboard when requested.
         if dashboard_callback is not None:
             elapsed = max(time.time() - start_frame_time, 1e-6)
             dashboard_callback({
@@ -601,8 +697,8 @@ def run_perception_pipeline(
                 "confidence": float(best_conf) if 'best_conf' in locals() else 0.0,
                 "state": STATE_NAMES[current_system_state],
                 "distance": float(target_distance),
-                "pan_error": float(pan_err),
-                "tilt_error": float(tilt_err),
+                "pan_error": float(err_x),
+                "tilt_error": float(err_y),
                 "fps": float(1.0 / elapsed),
             })
 
@@ -635,12 +731,16 @@ def run_perception_pipeline(
 # 5. CLI Execution Handler
 # ==========================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SIH26050 Anti-Drone CV & Fusion Pipeline")
-    parser.add_argument("--source", type=str, default="0", help="Video source (0 for webcam, or video file path)")
-    parser.add_argument("--port", type=str, default="/dev/ttyUSB0", help="Serial port (e.g. /dev/ttyUSB0, COM3)")
-    parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
+    parser = argparse.ArgumentParser(description="Project Zero / SIH26050 Optical Gimbal Tracking Pipeline")
+    parser.add_argument("--source", type=str, default="0", help="Video source (0 for USB webcam, or video file path)")
+    parser.add_argument("--port", type=str, default="auto", help="Serial port (auto, COMx, /dev/ttyUSBx)")
+    parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
     parser.add_argument("--no-yolo", action="store_true", help="Disable YOLO detection and use color tracker")
     parser.add_argument("--weights", type=str, default="yolov8n.pt", help="YOLO model weights (local file path or HuggingFace ID)")
+    parser.add_argument("--detection-interval", type=int, default=1, help="Run YOLO detection every N frames (default: 1 for every frame)")
+    parser.add_argument("--width", type=int, default=640, help="Camera width (default: 640)")
+    parser.add_argument("--height", type=int, default=480, help="Camera height (default: 480)")
+    parser.add_argument("--deadzone", type=int, default=15, help="Deadzone in pixels (default: 15)")
 
     args = parser.parse_args()
 
@@ -656,5 +756,10 @@ if __name__ == "__main__":
         serial_port=args.port,
         baud_rate=args.baud,
         use_yolo=use_yolo,
-        weights_path=args.weights
+        weights_path=args.weights,
+        detection_interval=args.detection_interval,
+        cam_width=args.width,
+        cam_height=args.height,
+        deadzone=args.deadzone,
     )
+    
