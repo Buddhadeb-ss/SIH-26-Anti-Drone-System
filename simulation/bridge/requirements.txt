@@ -1,0 +1,4 @@
+# Optional dependencies for physical USB serial communication
+# (bridge.py will run out of the box with zero dependencies in MOCK mode)
+pyserial>=3.5
+websockets>=12.0

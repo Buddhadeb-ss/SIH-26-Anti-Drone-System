@@ -1,189 +1,478 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Anti-Drone System · Scenario Console</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIH26050 | Physical Digital Twin & Anti-Drone Simulation</title>
+  <meta name="description"
+    content="3D Digital-Twin simulation for SIH26050: Physical prototype, bright Ladakh environment, dual 180° radars, and multi-drone scenarios." />
+  <link rel="stylesheet" href="./css/hud.css" />
+  <script>
+    if (window.location.protocol === 'file:') {
+      window.addEventListener('DOMContentLoaded', function () {
+        const bar = document.createElement('div');
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#b3001e;color:#fff;padding:12px 20px;text-align:center;font-family:Segoe UI,sans-serif;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,0.6);';
+        bar.innerHTML = '⚠️ <strong>NOTICE:</strong> Direct file:// URLs block 3D WebGL modules in Chrome/Edge. Please start the simulation via <strong>run.bat</strong> or open <a href="http://localhost:8085" style="color:#00ffff;text-decoration:underline;font-weight:bold;">http://localhost:8085</a>.';
+        document.body.prepend(bar);
+      });
+    }
+  </script>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/controls/OrbitControls.js": "./vendor/three/OrbitControls.js"
+      }
+    }
+  </script>
 </head>
+
 <body>
-<div id="app">
+  <!-- 3D WebGL Canvas Container -->
+  <div id="canvas-container"></div>
 
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-mark"><span>◈</span></div>
-      <div>
-        <div class="brand-title">ANTI-DRONE SYSTEM</div>
-      </div>
+  <!-- Optical Boresight Overlay for Gimbal POV -->
+  <div id="boresight-reticle">
+    <div class="reticle-crosshair">
+      <div class="reticle-circle"></div>
+      <div class="reticle-inner-dot"></div>
+      <div class="reticle-line h-left"></div>
+      <div class="reticle-line h-right"></div>
+      <div class="reticle-line v-top"></div>
+      <div class="reticle-line v-bottom"></div>
     </div>
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="tracking">01 · TRACKING &amp; DETECTION</button>
-      <button class="tab-btn" data-tab="env">02 · ENVIRONMENTAL &amp; THERMAL</button>
-    </div>
-    <div class="topbar-right">
-      <div class="pill sim" id="sourcePill" title="Press H to toggle">SRC: SIMULATION</div>
-      <div class="clock" id="clockReadout">T+00:00:00</div>
-    </div>
-  </header>
+  </div>
 
-  <!-- ============ TRACKING VIEW ============ -->
-  <main class="view active" id="view-tracking">
-    <section class="viewport-wrap" id="viewportWrap">
-      <canvas id="mainCanvas"></canvas>
-      <div class="viewport-hud">
-        <div class="hud-topleft">
-          <div class="hud-row">SITE ALT <b id="hudAlt">4500</b> m &nbsp;|&nbsp; SCENARIO <b id="hudScenario">01 · STRAIGHT APPROACH</b></div>
+  <!-- System Notification Toast -->
+  <div id="hud-toast">Simulation Initialized</div>
+
+  <!-- Target Neutralized Tactical Kill Banner -->
+  <div id="hud-neutralized-banner" class="hud-kill-banner">
+    <div class="kill-badge">⚡ KINETIC KILL CONFIRMED</div>
+    <div class="kill-details"><span id="kill-target-text">TARGET D01 DESTROYED</span> | BDA: POSITIVE</div>
+  </div>
+
+  <!-- Tactical HUD Overlay -->
+  <div class="hud-overlay">
+    <!-- Top Header -->
+    <header class="hud-header hud-interactive">
+      <div class="header-brand">
+        <span class="brand-badge">SIH26050</span>
+        <div>
+          <div class="brand-title">Anti-Drone Prototype Digital Twin</div>
+          <div class="brand-subtitle">High-Altitude Mountain Ridge Overlook (4,120m MSL) | Dual 180° FMCW Radars (20m
+            Domain)</div>
         </div>
-        <div class="hud-topright">
-          <div class="lock-badge searching" id="lockBadge">SEARCHING</div>
+      </div>
+
+      <div class="header-status-strip">
+        <div class="status-pill">
+          <span class="indicator-dot"></span>
+          <span>SYSTEM: <strong id="sys-status-text">ONLINE / SIMULATING</strong></span>
         </div>
-        <div class="hud-bottomleft">drag = orbit &nbsp;·&nbsp; scroll = zoom &nbsp;·&nbsp; keys 1–9,0 = scenarios</div>
+        <div class="status-pill">
+          <span>ACTIVE: <strong id="val-active-drones">1</strong></span>
+        </div>
+        <div class="status-pill">
+          <span>RADAR: <strong id="val-detected-drones" style="color: var(--accent-green);">1</strong></span>
+        </div>
+        <div class="status-pill">
+          <span>T: <strong id="sim-time-text">00:00.0</strong></span>
+        </div>
+        <button class="btn-tactical" id="btn-toggle-hud" title="Toggle side telemetry panels for full 3D view"
+          style="padding: 4px 8px; font-size: 11px;">
+          <span>⊞</span> <span>TOGGLE HUD</span>
+        </button>
       </div>
-    </section>
+    </header>
 
-    <aside class="side-rail">
+    <!-- Main Body Telemetry Panels -->
+    <main class="hud-body">
+      <!-- Left Panel: Active Target Telemetry -->
+      <section class="hud-panel hud-interactive" id="drone-telemetry-panel">
+        <div class="panel-header">
+          <div class="panel-title">Target Drone Telemetry</div>
+          <span class="panel-tag" id="val-target-id">TARGET: D01</span>
+        </div>
 
-      <div class="panel" id="panel-target">
-        <div class="panel-title">Target Data <span class="tag" id="targetIdTag">NO TRACK</span></div>
-        <div class="data-row"><span>Classification</span><b id="tClass">—</b></div>
-        <div class="data-row"><span>Range</span><b id="tRange">— m</b></div>
-        <div class="data-row"><span>Azimuth / Elevation</span><b id="tAzEl">—</b></div>
-        <div class="data-row"><span>Altitude AGL</span><b id="tAlt">— m</b></div>
-        <div class="data-row"><span>Closing Speed</span><b id="tSpd">— m/s</b></div>
-        <div class="data-row"><span>RCS Estimate</span><b id="tRcs">— dBsm</b></div>
-        <div class="data-row"><span>Threat Level</span><span class="threat-badge threat-LOW" id="tThreat">LOW</span></div>
-        <button class="btn-engage" id="engageBtn" disabled>ENGAGE / NEUTRALIZE (N)</button>
-      </div>
+        <div class="telemetry-grid">
+          <div class="telemetry-card highlight">
+            <div class="telemetry-label">Slant Range</div>
+            <div class="telemetry-value"><span id="val-slant-range">0.0</span><span class="telemetry-unit">m</span>
+            </div>
+            <div class="telemetry-sub">Line-of-sight distance</div>
+          </div>
 
-      <div class="panel" id="panel-gimbal-radar">
-        <div class="panel-title">Gimbal &amp; Radar</div>
-        <div class="subgrid">
+          <div class="telemetry-card highlight">
+            <div class="telemetry-label">Drone Speed</div>
+            <div class="telemetry-value"><span id="val-speed-ms">0.0</span><span class="telemetry-unit">m/s</span></div>
+            <div class="telemetry-sub"><span id="val-speed-kmh">0.0</span> km/h</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="telemetry-label">Radar Detection</div>
+            <div class="telemetry-value" id="val-radar-source" style="font-size: 13px; color: var(--accent-green);">
+              RADAR A</div>
+            <div class="telemetry-sub">Dual 180° Sensor</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="telemetry-label">Threat Level</div>
+            <div class="telemetry-value" id="val-threat-level" style="font-size: 13px; color: var(--accent-amber);">
+              MEDIUM</div>
+            <div class="telemetry-sub">Distance-based</div>
+          </div>
+
+          <div class="telemetry-card highlight" id="card-settlement-proximity">
+            <div class="telemetry-label">Settlement Proximity</div>
+            <div class="telemetry-value"><span id="val-building-dist">--</span><span class="telemetry-unit">m</span>
+            </div>
+            <div class="telemetry-sub" id="val-settlement-threat">Distance to structures</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 8px;">
+          <div class="telemetry-card">
+            <div class="telemetry-label">Position Vector [X, Y, Z] (metres)</div>
+            <div class="telemetry-value" style="font-size: 12px;">
+              X: <span id="val-pos-x" style="color: var(--accent-cyan);">0.0</span> |
+              Y: <span id="val-pos-y" style="color: var(--accent-green);">0.0</span> |
+              Z: <span id="val-pos-z" style="color: var(--accent-amber);">0.0</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 8px;">
+          <div class="telemetry-card">
+            <div class="telemetry-label">Velocity Vector [Vx, Vy, Vz] (m/s)</div>
+            <div class="telemetry-value" style="font-size: 12px;">
+              Vx: <span id="val-vel-x">0.0</span> |
+              Vy: <span id="val-vel-y">0.0</span> |
+              Vz: <span id="val-vel-z">0.0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Relative Bearing & Compass Dial -->
+        <div class="compass-box">
           <div>
-            <div class="subhead">Gimbal</div>
-            <div class="data-row"><span>Pan</span><b id="gPan">0.0°</b></div>
-            <div class="data-row"><span>Tilt</span><b id="gTilt">0.0°</b></div>
-            <div class="data-row"><span>Slew Rate</span><b id="gSlew">90°/s</b></div>
-            <div class="data-row"><span>Pointing Err</span><b id="gErr">— µrad</b></div>
+            <div class="telemetry-label">Target Bearing (Azimuth)</div>
+            <div class="telemetry-value"><span id="val-target-azimuth">000.0</span><span class="telemetry-unit">°</span>
+            </div>
+            <div class="telemetry-sub" style="margin-top: 4px;">Target Elevation: <strong id="val-target-elevation"
+                style="color: #fff;">+00.0°</strong></div>
           </div>
-          <div>
-            <div class="subhead">Radar / EO</div>
-            <div class="data-row"><span>Radar Mode</span><b id="rMode">SEARCH</b></div>
-            <div class="data-row"><span>Radar Range</span><b>520 m</b></div>
-            <div class="data-row"><span>EO Lock Range</span><b>300 m</b></div>
-            <div class="data-row"><span>CV Confidence</span><b id="cvConf">—</b></div>
+          <div class="compass-visual" title="Target Bearing relative to North">
+            <div class="compass-needle" id="compass-needle"></div>
           </div>
         </div>
-      </div>
 
-      <div class="panel" id="panel-cv">
-        <div class="panel-title">CV Detection Output <span class="tag" id="cvSourceTag">SIM</span></div>
-        <div class="cv-inset-wrap">
-          <canvas id="cvCanvas" width="320" height="192"></canvas>
-          <canvas id="cvOverlay" width="320" height="192"></canvas>
+        <!-- Kinetic Defense Neutralization Action -->
+        <div class="defense-action-box" style="margin-top: 6px;">
+          <div class="telemetry-label"
+            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+            <span>KINETIC DEFENSE SYSTEM</span>
+            <span style="color: #00ff88; font-size: 8.5px; font-weight: bold; letter-spacing: 0.5px;">● CANISTER
+              ARMED</span>
+          </div>
+          <button class="btn-tactical danger" id="btn-launch-interceptor"
+            style="width: 100%; margin-top: 4px; background: linear-gradient(135deg, rgba(239, 68, 68, 0.4), rgba(185, 28, 28, 0.7)); border: 1px solid #ef4444; color: #fff; font-weight: bold; font-family: monospace; letter-spacing: 0.5px; padding: 6px 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; border-radius: 4px; box-shadow: 0 0 10px rgba(239, 68, 68, 0.35); transition: all 0.2s ease;">
+            <span>🚀</span> <span>FIRE INTERCEPTOR MISSILE</span>
+          </button>
         </div>
-        <div class="cv-caption" id="cvCaption">Synthetic gimbal-camera render used as demo fallback per Scenario Simulation plan. Press H to preview the hardware-feed placeholder.</div>
-      </div>
+      </section>
 
-      <div class="panel" id="panel-scenarios">
-        <div class="panel-title">Scenario Select</div>
-        <div class="scenario-grid" id="scenarioGrid"></div>
-        <div class="action-row">
-          <div class="action-chip" data-act="R" id="chipR">R · RANDOM</div>
-          <div class="action-chip" data-act="H" id="chipH">H · SRC</div>
-          <div class="action-chip" data-act="SPACE" id="chipSpace">⎵ PAUSE</div>
-          <div class="action-chip" data-act="C" id="chipC">C · RESET</div>
+      <!-- Right Panel: Dedicated 2D Radar Scope & Prototype Gimbal Status -->
+      <section class="hud-panel hud-interactive" id="station-telemetry-panel">
+        <div class="panel-header">
+          <div class="panel-title">2D Radar Scope</div>
+          <span class="panel-tag" style="background: rgba(0, 229, 163, 0.15); color: #00e5a3;">20m PPI</span>
         </div>
-      </div>
 
-    </aside>
-  </main>
+        <!-- Dedicated 2D Canvas Radar Scope -->
+        <div class="radar-scope-container">
+          <canvas id="radar-2d-canvas" width="160" height="160" title="Click any drone blip to target"></canvas>
+        </div>
 
-  <!-- ============ ENVIRONMENTAL VIEW ============ -->
-  <main class="view" id="view-env">
-    <div class="env-grid">
-
-      <div class="panel span-full" id="panel-altitude">
-        <div class="panel-title">Deployment Altitude &amp; Ambient Conditions</div>
-        <div class="alt-row">
-          <input type="range" id="altSlider" min="0" max="6200" step="50" value="4500">
-          <div class="alt-presets">
-            <button class="preset-btn" data-alt="0">SEA LEVEL</button>
-            <button class="preset-btn" data-alt="3500">LEH · 3500m</button>
-            <button class="preset-btn" data-alt="5000">SIACHEN · 5000m</button>
-            <button class="preset-btn" data-alt="6200">EXTREME · 6200m</button>
+        <!-- Hardware Architecture & STM32 Integration -->
+        <div class="hw-section-header">
+          <div class="hw-title">HARDWARE INTERFACE</div>
+          <div class="hw-mode-toggle">
+            <button class="btn-hw-toggle active" id="btn-hw-sim"
+              title="Run in Virtual STM32 Simulation mode">SIMULATION</button>
+            <button class="btn-hw-toggle" id="btn-hw-real"
+              title="Connect to Physical STM32 via Python Bridge">REAL</button>
           </div>
         </div>
-        <div class="readout-grid">
-          <div class="readout"><div class="rv" id="roAlt">4500 m</div><div class="rl">Altitude</div></div>
-          <div class="readout"><div class="rv" id="roTemp">−14.3°C</div><div class="rl">Ambient Temp</div></div>
-          <div class="readout"><div class="rv" id="roPress">57.7 kPa</div><div class="rl">Atmospheric Pressure</div></div>
-          <div class="readout"><div class="rv" id="roDensity">63%</div><div class="rl">Air Density (vs sea level)</div></div>
-        </div>
-      </div>
 
-      <div class="panel" id="panel-thermal">
-        <div class="panel-title">NTC Thermal Management <span class="tag">STM32-monitored</span></div>
-        <div class="thermo-wrap">
-          <div class="thermo-bar-wrap">
-            <div class="thermo-bar" id="thermoBar"><div class="thermo-fill" id="thermoFill"></div></div>
-            <div class="thermo-val" id="thermoVal">—</div>
+        <div class="hw-status-strip connected" id="hw-status-strip">
+          <span class="indicator-dot" id="hw-status-dot"></span>
+          <span id="hw-status-text">ONLINE (VIRTUAL STM32)</span>
+        </div>
+
+        <!-- Hardware Control Action Buttons -->
+        <div class="hw-action-buttons" style="margin-top: 2px; margin-bottom: 4px;">
+          <button class="btn-hw-action" id="btn-hw-enable" title="Enable Stepper Drivers">ENABLE</button>
+          <button class="btn-hw-action" id="btn-hw-disable" title="Disable Stepper Drivers">DISABLE</button>
+          <button class="btn-hw-action" id="btn-hw-home" title="Return to Home Zero Position">HOME</button>
+          <button class="btn-hw-action danger" id="btn-hw-stop" title="Emergency Stop Motors">STOP</button>
+        </div>
+
+        <!-- Operating Mode Selector -->
+        <div class="hw-section-header">
+          <div class="hw-title">OPERATING MODE</div>
+        </div>
+        <div class="mode-tabs">
+          <button class="mode-tab-btn" data-mode="stress" id="btn-mode-stress"
+            title="1. Environmental Stress Disturbance">1. Stress</button>
+          <button class="mode-tab-btn" data-mode="pid" id="btn-mode-pid" title="2. PID Closed-Loop Compensation">2. PID
+            Loop</button>
+          <button class="mode-tab-btn active" data-mode="tracking" id="btn-mode-tracking"
+            title="3. Live Drone Tracking">3. Live Track</button>
+        </div>
+
+        <!-- Stepper Telemetry Card (Steps, Angles, Thermal, Heater) -->
+        <div class="telemetry-grid">
+          <div class="telemetry-card">
+            <div class="telemetry-label">Pan Stepper (±180° Limit)</div>
+            <div class="telemetry-value"><span id="val-hw-pan-steps">0</span> <span class="telemetry-unit">stp</span>
+            </div>
+            <div class="telemetry-sub">Tgt: <span id="val-hw-pan-tgt">0</span> | <span id="val-gimbal-pan">0.0</span>°
+            </div>
           </div>
-          <div class="chart-col">
-            <canvas id="tempChart" width="600" height="150"></canvas>
+
+          <div class="telemetry-card">
+            <div class="telemetry-label">Tilt Stepper (Cable-Safe)</div>
+            <div class="telemetry-value"><span id="val-hw-tilt-steps">0</span> <span class="telemetry-unit">stp</span>
+            </div>
+            <div class="telemetry-sub">Tgt: <span id="val-hw-tilt-tgt">0</span> | <span id="val-gimbal-tilt">0.0</span>°
+            </div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="telemetry-label">Motor Temps</div>
+            <div class="telemetry-value" style="font-size: 10.5px;">
+              M1: <span id="val-hw-temp-m1" style="color: var(--accent-amber);">24.5</span>°C | M2: <span
+                id="val-hw-temp-m2" style="color: var(--accent-amber);">23.2</span>°C
+            </div>
+            <div class="telemetry-sub">PTC Heater: <strong id="val-hw-heater"
+                style="color: var(--accent-green);">OFF</strong></div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="telemetry-label">Driver State</div>
+            <div class="telemetry-value" id="val-tracking-status" style="font-size: 11px; color: var(--accent-green);">
+              ENABLED</div>
+            <div class="telemetry-sub" id="val-hw-sync-mode">DIGITAL TWIN SYNC</div>
+            <div class="telemetry-sub" style="color: var(--accent-cyan); margin-top: 1px;">Cable Safe: <strong>±180°
+                LIMIT</strong></div>
           </div>
         </div>
-        <div class="indicator-row">
-          <div class="indicator cool" id="indHeater"><div class="dot"></div><div><div class="it">HEATER</div><div class="is" id="heaterState">OFF</div></div></div>
-          <div class="indicator" id="indFan"><div class="dot"></div><div><div class="it">COOLING FAN</div><div class="is" id="fanState">OFF</div></div></div>
+
+        <!-- Atmospheric Stress & Machine Reaction Monitor Card -->
+        <div class="telemetry-card highlight" id="card-env-reaction"
+          style="margin-top: 4px; border-color: rgba(0, 240, 255, 0.4); padding: 3px 5px;">
+          <div class="telemetry-label"
+            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+            <span>ATMOSPHERIC STRESS & REACTION</span>
+            <span id="env-stress-badge"
+              style="color: var(--accent-cyan); font-size: 8.5px; font-weight: bold; letter-spacing: 0.5px;">STRESS:
+              32%</span>
+          </div>
+          <div class="telemetry-grid" style="grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 2px;">
+            <div style="background: rgba(10, 16, 26, 0.6); padding: 2px 4px; border-radius: 3px;">
+              <span style="font-size: 8px; color: var(--text-secondary);">Aero Drag Torque:</span><br />
+              <strong id="val-rxn-torque" style="color: var(--accent-amber); font-size: 10px;">0.18 Nm</strong>
+            </div>
+            <div style="background: rgba(10, 16, 26, 0.6); padding: 2px 4px; border-radius: 3px;">
+              <span style="font-size: 8px; color: var(--text-secondary);">Wind Deflection:</span><br />
+              <strong id="val-rxn-deflection" style="color: var(--accent-cyan); font-size: 10px;">±0.2°</strong>
+            </div>
+            <div style="background: rgba(10, 16, 26, 0.6); padding: 2px 4px; border-radius: 3px;">
+              <span style="font-size: 8px; color: var(--text-secondary);">Drone Wind Tilt:</span><br />
+              <strong id="val-rxn-dronetilt" style="color: var(--accent-cyan); font-size: 9.5px;">0.0° (Level)</strong>
+            </div>
+            <div style="background: rgba(10, 16, 26, 0.6); padding: 2px 4px; border-radius: 3px;">
+              <span style="font-size: 8px; color: var(--text-secondary);">Bearing Lubricant:</span><br />
+              <strong id="val-rxn-viscosity" style="color: #cbd5e1; font-size: 9.5px;">STIFFENED (+33%)</strong>
+            </div>
+          </div>
+          <div
+            style="margin-top: 3px; padding-top: 2px; border-top: 1px solid rgba(70,100,140,0.25); font-size: 8.5px; font-family: var(--font-mono); display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: var(--text-secondary);">Reaction:</span>
+            <strong id="val-rxn-machine"
+              style="color: var(--accent-green); text-shadow: 0 0 6px rgba(0,255,136,0.4);">HOLDING | COUNTER-TORQUE
+              ACTIVE</strong>
+          </div>
         </div>
-        <div class="toggle-row">
-          <span>Force max thermal load (stress-test demo)</span>
-          <div class="switch" id="loadSwitch"><div class="knob"></div></div>
+
+        <!-- MODE 1 SUBPANEL: Environmental Stress Controls -->
+        <div class="mode-subpanel" id="subpanel-mode-stress">
+          <div class="subpanel-label">
+            <span>Wind Speed:</span>
+            <strong id="val-env-wind" style="color: var(--accent-cyan);">12.0 m/s</strong>
+          </div>
+          <input type="range" class="slider-tactical" id="slider-env-wind" min="0" max="30" step="0.5" value="12" />
+
+          <div class="subpanel-label">
+            <span>Ambient Temp:</span>
+            <strong id="val-env-temp" style="color: var(--accent-cyan);">-15.0 °C</strong>
+          </div>
+          <input type="range" class="slider-tactical" id="slider-env-temp" min="-30" max="30" step="1" value="-15" />
+
+          <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); line-height: 1.4;">
+            Disturbance Torque: <span id="val-env-torque" style="color: var(--accent-amber);">0.00 Nm</span><br />
+            Expected Error: <span id="val-env-err-pan" style="color: var(--accent-red);">0.0°</span> Pan | <span
+              id="val-env-err-tilt" style="color: var(--accent-red);">0.0°</span> Tilt
+          </div>
         </div>
-        <div class="predict-note" id="predictNote">Component tracking ambient — no active thermal event.</div>
-        <div class="predict-note">Thermal response accelerated ~6× for live demonstration.</div>
+
+        <!-- MODE 2 SUBPANEL: PID Controller Tuning & Live Graphs -->
+        <div class="mode-subpanel" id="subpanel-mode-pid">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">Test
+              Input:</span>
+            <select class="select-tactical" id="select-pid-test" style="padding: 2px 4px; font-size: 10px;">
+              <option value="live">Live Drone Target</option>
+              <option value="step">Square Step (±25°)</option>
+              <option value="sine">Sinusoidal Wave (±35°)</option>
+            </select>
+          </div>
+
+          <div class="subpanel-label">
+            <span>Kp (Proportional): <strong id="val-pid-kp">1.35</strong></span>
+          </div>
+          <input type="range" class="slider-tactical" id="slider-pid-kp" min="0" max="5.0" step="0.05" value="1.35" />
+
+          <div class="subpanel-label">
+            <span>Ki (Integral): <strong id="val-pid-ki">0.12</strong></span>
+          </div>
+          <input type="range" class="slider-tactical" id="slider-pid-ki" min="0" max="1.0" step="0.01" value="0.12" />
+
+          <div class="subpanel-label">
+            <span>Kd (Derivative): <strong id="val-pid-kd">0.22</strong></span>
+          </div>
+          <input type="range" class="slider-tactical" id="slider-pid-kd" min="0" max="1.0" step="0.01" value="0.22" />
+
+          <!-- Live Canvas Graph 1: Target vs Actual Position -->
+          <div class="pid-graph-container">
+            <div class="pid-graph-title">
+              <span>TARGET VS ACTUAL ANGLE</span>
+              <span><span style="color: #00ff88;">■</span> Tgt <span style="color: #00f0ff;">■</span> Act</span>
+            </div>
+            <canvas class="pid-graph-canvas" id="canvas-pid-response" width="270" height="52"></canvas>
+          </div>
+
+          <!-- Live Canvas Graph 2: Position Error vs Time -->
+          <div class="pid-graph-container">
+            <div class="pid-graph-title">
+              <span>TRACKING ERROR VS TIME</span>
+              <span style="color: #ff3355;">■ Err (deg)</span>
+            </div>
+            <canvas class="pid-graph-canvas" id="canvas-pid-error" width="270" height="52"></canvas>
+          </div>
+        </div>
+
+        <!-- MODE 3 SUBPANEL: Live Drone Tracking -->
+        <div class="mode-subpanel active" id="subpanel-mode-tracking">
+          <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); line-height: 1.5;">
+            Tracking Source: <strong style="color: var(--accent-green);">DUAL 180° RADAR + OPTICAL</strong><br />
+            Azimuth Lock: <strong id="val-track-lock-az" style="color: var(--accent-cyan);">±0.1°</strong> | Elev Lock:
+            <strong id="val-track-lock-el" style="color: var(--accent-cyan);">±0.1°</strong>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Mission Bar: Controls, Scenarios & Camera Presets -->
+    <footer class="hud-footer hud-interactive">
+      <div class="controls-row">
+        <!-- Scenario Selector -->
+        <div class="control-group">
+          <span class="group-label">Scenario:</span>
+          <select class="select-tactical" id="select-scenario" title="Choose Tactical Drone Scenario">
+            <option value="single_intruder" selected>1. Single Intruder</option>
+            <option value="drone_attack">2. Drone Attack (High Threat)</option>
+            <option value="multiple_drones">3. Multiple Drones</option>
+            <option value="zigzag_evasive">4. Zigzag / Evasive</option>
+            <option value="altitude_change">5. Altitude Change</option>
+            <option value="multi_axis_attack">6. Multi-Axis Attack</option>
+            <option value="swarm_many">7. Swarm / Many Drones</option>
+            <option value="missile_neutralization">8. Kinetic Missile Neutralization (Demo)</option>
+            <option value="settlement_swarm">9. Settlement Swarm Attack (25 Drones)</option>
+          </select>
+        </div>
+
+        <!-- Playback Controls -->
+        <div class="control-group">
+          <button class="btn-tactical primary" id="btn-play-pause" title="Play or Pause Simulation">
+            <span id="btn-play-icon">⏸</span> <span id="btn-play-label">PAUSE</span>
+          </button>
+          <button class="btn-tactical danger" id="btn-reset" title="Reset Current Scenario">
+            <span>↺</span> <span>RESET</span>
+          </button>
+          <select class="select-tactical" id="select-speed" title="Simulation Time Multiplier">
+            <option value="0.5">0.5x</option>
+            <option value="1.0" selected>1.0x (Real-time)</option>
+            <option value="2.0">2.0x</option>
+          </select>
+        </div>
+
+        <!-- Camera View Presets -->
+        <div class="control-group">
+          <span class="group-label">View:</span>
+          <button class="btn-tactical active" data-cam="orbit" id="cam-orbit" title="Free orbit around prototype">Free
+            Orbit</button>
+          <button class="btn-tactical" data-cam="station" id="cam-station"
+            title="Close-up on NEMA-17 steppers & webcam">Prototype Close-up</button>
+          <button class="btn-tactical" data-cam="gimbal" id="cam-gimbal" title="Webcam optical POV">Webcam POV</button>
+          <button class="btn-tactical" data-cam="drone" id="cam-drone" title="Chase selected drone">Drone Chase</button>
+          <button class="btn-tactical" data-cam="topdown" id="cam-topdown"
+            title="Top-down radar overview">Top-Down</button>
+        </div>
+
+        <!-- Display Toggles -->
+        <div class="control-group">
+          <span class="group-label">Layers:</span>
+          <div class="toggle-chip active" id="toggle-radarsectors" title="Toggle 180° Radar A & B Sectors in 3D">
+            <span class="toggle-dot"></span> Radar Sectors
+          </div>
+          <div class="toggle-chip active" id="toggle-trajectory" title="Toggle 3D Drone Flight Trajectories">
+            <span class="toggle-dot"></span> Trajectories
+          </div>
+          <div class="toggle-chip active" id="toggle-grid" title="Toggle 20m Radar Range Datum">
+            <span class="toggle-dot"></span> 20m Datum
+          </div>
+        </div>
+
+        <!-- Atmospheric Stress Toggles -->
+        <div class="control-group">
+          <span class="group-label">Atmosphere:</span>
+          <div class="toggle-chip" id="toggle-env-wind" title="Toggle Severe Himalayan Wind (24.0 m/s)">
+            <span class="toggle-dot"></span> 💨 High Wind
+          </div>
+          <div class="toggle-chip active" id="toggle-env-freeze"
+            title="Toggle Sub-Zero Freezing (-22°C) vs Mild (+18°C)">
+            <span class="toggle-dot"></span> ❄️ Sub-Zero Freeze
+          </div>
+        </div>
       </div>
+    </footer>
+  </div>
 
-      <div class="panel" id="panel-pdw">
-        <div class="panel-title">Pressure · Dust · Wind Hardening <span class="tag">Hardware-in-the-loop</span></div>
-        <div class="bar-gauge">
-          <div class="bh"><span>Enclosure Pressure Equalization <span class="hw-tag">HW: Gore-Tex vent + sealed IP6X shell</span></span><span id="pdwPress">ΔP ≈ 0 kPa</span></div>
-          <div class="bar-track"><div class="bar-fill" id="pressBar" style="width:100%"></div></div>
-        </div>
-        <div class="status-line" id="pressStatus">SEALED — GORE VENT NOMINAL</div>
-        <div class="predict-note" id="pressNote">Gathering pressure trend…</div>
+  <!-- Navigation Helper Bar -->
+  <div class="help-overlay">
+    <span><span class="help-key">LMB + Drag</span> Orbit</span>
+    <span><span class="help-key">RMB + Drag</span> Pan</span>
+    <span><span class="help-key">Scroll</span> Zoom</span>
+    <span><span class="help-key">Click Radar</span> Select Drone</span>
+    <span><span class="help-key">Space</span> Pause</span>
+    <span><span class="help-key">R</span> Reset</span>
+  </div>
 
-        <div class="bar-gauge" style="margin-top:14px;">
-          <div class="bh"><span>Particulate Concentration <span class="hw-tag">HW: sealed IP6X shell + auto-wipe lens + purge fan</span></span><span id="dustReadout">5 µg/m³</span></div>
-          <div class="bar-track"><div class="bar-fill" id="dustBar" style="width:1%;background:var(--ember)"></div></div>
-        </div>
-        <button class="dust-btn" id="dustBtn">SIMULATE DUST STORM</button>
-        <div class="status-line" id="dustStatus">IP6X SEALED — 0 INGRESS DETECTED</div>
-        <div class="predict-note" id="dustNote">No particulate ingress detected.</div>
-
-        <div class="bar-gauge" style="margin-top:14px;">
-          <div class="bh"><span>Wind Speed <span class="hw-tag">HW: direct-drive pan/tilt motors + encoders</span></span><span id="windReadout">6 m/s</span></div>
-          <input type="range" id="windSlider" min="0" max="30" step="1" value="6">
-        </div>
-        <div class="data-row"><span>Stabilization Compensation</span><b id="windComp">— N·m</b></div>
-        <div class="data-row"><span>Residual Pointing Error</span><b id="windErr">— µrad (spec &lt;50)</b></div>
-        <div class="status-line" id="windStatus">CLOSED-LOOP STABILIZATION ACTIVE</div>
-        <div class="predict-note" id="windNote">Gathering stabilization trend…</div>
-      </div>
-
-    </div>
-  </main>
-
-  <footer class="statusbar">
-    <span><b>Scenarios</b> 1 Straight · 2 Left→Right · 3 Right→Left · 4 Climbing · 5 Maneuver · 6 Diving · 7 Hover/ISR · 8 Orbit · 9 Erratic/Jam · 0 Swarm ×3 &nbsp;|&nbsp; <b>Actions</b> R Random · H Source · N Engage · Space Pause · C Reset</span>
-    <span id="footRight">ANTI-DRONE SYSTEM</span>
-  </footer>
-
-  <div class="toast" id="toast"></div>
-  <div id="dustFx"></div>
-</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="script.js"></script>
+  <!-- Application Entry Point -->
+  <script type="module" src="./src/main.js"></script>
 </body>
+
 </html>
