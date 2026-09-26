@@ -1,55 +1,69 @@
-# SIH 2026 — Anti-Drone System
+# SIH 2026 --- Anti-Drone System
 
+```{=html}
 <p align="center">
-  <img src="docs/images/hero.png" width="95%">
+```
+`<img src="docs/images/Interceptor-missle-simulation.png" width="95%">`{=html}
+```{=html}
 </p>
-
+```
+```{=html}
 <h3 align="center">
+```
 High-Altitude Robust Anti-Drone System
+```{=html}
 </h3>
-
+```
+```{=html}
 <p align="center">
-  Radar • Computer Vision • Sensor Fusion • Embedded Control • Precision Gimbal • 3D Simulation • HIL
+```
+Radar • Computer Vision • Sensor Fusion • Embedded Control • Precision
+Gimbal • 3D Simulation • HIL
+```{=html}
 </p>
-
+```
+```{=html}
 <p align="center">
-  <a href="https://github.com/Buddhadeb-ss/SIH-26-Anti-Drone-System">Repository</a>
-  ·
-  <a href="#simulation">Simulation</a>
-  ·
-  <a href="#dashboard">Dashboard</a>
-  ·
-  <a href="#architecture">Architecture</a>
+```
+`<b>`{=html}Smart India Hackathon 2026 · SIH26050 · DRDO`</b>`{=html}
+```{=html}
 </p>
+```
 
----
+------------------------------------------------------------------------
 
 ## Overview
 
-This project is a modular **anti-drone detection, tracking and precision-pointing system** developed for **Smart India Hackathon 2026 — SIH26050**.
+This project is a modular **anti-drone detection, tracking and
+precision-pointing system** developed for **Smart India Hackathon 2026
+--- SIH26050**.
 
-The system combines radar awareness, camera-based computer vision, target tracking, STM32 embedded control and a 2-axis gimbal into a single architecture.
+The system combines radar awareness, camera-based computer vision,
+target tracking, STM32 embedded control, precision PAN/TILT actuation,
+and a real-time simulation environment.
 
-A dedicated real-time simulation and Hardware-in-the-Loop environment is used to validate the sensing and control pipeline under controlled environmental disturbances.
+A Hardware-in-the-Loop (HIL) workflow connects the simulated environment
+with the embedded controller, allowing system behaviour to be tested
+across software and hardware layers.
 
 ### Core Pipeline
 
-```text
+``` text
         RADAR                         CAMERA
           │                             │
           │                             ▼
           │                       ┌───────────┐
-          └──────────────────────▶│ Detection │
+          └──────────────────────►│ Detection │
                                   └─────┬─────┘
                                         │
                                         ▼
-                                 Target Tracking
+                                  Target Tracking
                                         │
                                         ▼
                                   Control System
                                         │
                                         ▼
-                                     STM32
+                                      STM32
                                         │
                                         ▼
                                   2-Axis Gimbal
@@ -58,80 +72,78 @@ A dedicated real-time simulation and Hardware-in-the-Loop environment is used to
                                   Target Pointing
 ```
 
----
+------------------------------------------------------------------------
 
 # System Demonstration
 
 ## Real-Time 3D Simulation
 
+```{=html}
 <p align="center">
-  <img src="docs/images/simulation-main.png" width="95%">
-</p>
-
-The simulation provides a real-time 3D environment for representing the radar, target, gimbal and control system together.
-
----
-
-## Multiple Simulation Views
-
-|                  3D Environment                  |                      360° Radar                     |
-| :----------------------------------------------: | :-------------------------------------------------: |
-| <img src="docs/images/3d-view.png" width="100%"> | <img src="docs/images/radar-view.png" width="100%"> |
-
-|                      Environmental Stress                     |                    PID Closed-Loop                   |
-| :-----------------------------------------------------------: | :--------------------------------------------------: |
-| <img src="docs/images/environmental-stress.png" width="100%"> | <img src="docs/images/pid-control.png" width="100%"> |
-
-The simulation is designed to make system behavior observable from multiple perspectives rather than relying on a single visualization.
-
----
-
-# Architecture
-
-```text
-                         ┌─────────────────────┐
-                         │       RADAR         │
-                         │ Detection / Bearing │
-                         │       / Range       │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-┌─────────────────┐        ┌─────────────────────┐
-│     CAMERA      │───────▶│ Detection / Fusion  │
-│                 │        │                     │
-│ YOLO-based CV   │        │ Target State        │
-└─────────────────┘        └──────────┬──────────┘
-                                      │
-                                      ▼
-                             ┌────────────────┐
-                             │ Target Tracking│
-                             └───────┬────────┘
-                                     │
-                                     ▼
-                             ┌────────────────┐
-                             │ Control System │
-                             │     STM32      │
-                             └───────┬────────┘
-                                     │
-                                     ▼
-                             ┌────────────────┐
-                             │  2-Axis Gimbal │
-                             │   PAN / TILT   │
-                             └───────┬────────┘
-                                     │
-                                     ▼
-                               Target Pointing
 ```
+`<img src="docs/images/Interceptor-missle-simulation.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+The simulation provides a real-time environment for representing the
+system, target and surrounding environment.
 
-The repository is organized around these independent subsystems, including dedicated areas for firmware, radar, vision, gimbal, dashboard, simulation, hardware and mechanical design.
+It is used to visualize system behaviour and test the tracking and
+control pipeline in a controlled environment.
 
----
+------------------------------------------------------------------------
+
+## Simulation Tracking
+
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/simulation-tracking.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+The tracking view demonstrates the simulated target-tracking workflow
+and provides a visual representation of system response.
+
+------------------------------------------------------------------------
+
+## Radar Simulation
+
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/Radar-simulation-tabs.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+The radar simulation provides dedicated views for observing
+radar-related information and different simulation states.
+
+The radar layer acts as an independent sensing source for target
+awareness.
+
+------------------------------------------------------------------------
+
+## Simulation Prototype
+
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/Simulation-prototype-closeup.png" width="90%">`{=html}
+```{=html}
+</p>
+```
+A close-up view of the simulation prototype used to demonstrate the
+developed system.
+
+------------------------------------------------------------------------
 
 # Computer Vision
 
-The vision subsystem provides camera-based target detection and tracking.
+The computer-vision subsystem provides camera-based target detection and
+tracking.
 
-```text
+``` text
 Camera
   │
   ▼
@@ -151,178 +163,185 @@ Target Tracking
 Control Pipeline
 ```
 
-The vision pipeline can be exercised independently using recorded test footage as well as integrated into the dashboard.
+## Hardware Tracking
 
----
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/CV-Hardware-tracking.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+The hardware-tracking view demonstrates the computer-vision pipeline
+operating as part of the integrated system.
+
+------------------------------------------------------------------------
+
+## Computer Vision Terminal
+
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/CV-Terminal-view.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+The terminal view provides visibility into the computer-vision
+processing and detection workflow.
+
+------------------------------------------------------------------------
 
 # Radar
 
 Radar provides an independent sensing layer for target awareness.
 
-The system represents radar information through a **360° radar visualization**, allowing target bearing and range information to be observed alongside the camera-based detection pipeline.
+The radar information can be represented in the simulation and used
+alongside camera-based detection as part of the overall tracking
+architecture.
 
-<p align="center">
-  <img src="docs/images/radar-view.png" width="70%">
-</p>
+``` text
+Radar
+  │
+  ├── Target Bearing
+  ├── Target Range
+  └── Target Detection
+          │
+          ▼
+      Target State
+          │
+          ▼
+    Tracking System
+```
 
----
+------------------------------------------------------------------------
 
 # Precision Gimbal
 
-The pointing system uses a **2-axis PAN/TILT gimbal**.
+The pointing subsystem uses a **2-axis PAN/TILT mechanism**.
 
-```text
+``` text
 Target Position
       │
       ▼
-Angular Error
+ Angular Error
       │
       ▼
-Controller
+  Controller
       │
       ▼
  PAN / TILT
       │
       ▼
-    STM32
+   STM32
       │
       ▼
    Gimbal
 ```
 
-The simulation allows the gimbal response and controller behavior to be evaluated without requiring every test to be performed on physical hardware.
+The control layer converts target-position information into pointing
+commands for the actuation system.
 
----
+------------------------------------------------------------------------
 
-# Environmental Stress Simulation
+# Embedded Hardware
 
-A major part of the project is the ability to study the effect of environmental disturbances on the tracking and pointing system.
+The embedded control layer is based around an **STM32 microcontroller**.
 
+## PCB and STM32
+
+```{=html}
 <p align="center">
-  <img src="docs/images/environmental-stress.png" width="90%">
-</p>
-
-The simulation provides controlled scenarios for studying effects such as:
-
-* Wind disturbance
-* Temperature variation
-* Mechanical disturbances
-* Sensor/control variations
-
-The purpose is to observe how disturbances propagate through the control loop and influence pointing behavior.
-
----
-
-# PID Closed-Loop Control
-
-The simulation includes a closed-loop control environment for tuning and observing gimbal response.
-
-<p align="center">
-  <img src="docs/images/pid-control.png" width="90%">
-</p>
-
-```text
-              Desired Angle
-                    │
-                    ▼
-              ┌──────────┐
-              │   PID    │
-              └────┬─────┘
-                   │
-                   ▼
-              Gimbal Model
-                   │
-                   ▼
-              Actual Angle
-                   │
-                   └────────── Feedback
 ```
+`<img src="docs/images/PCB%20%26%20STM32.png" width="90%">`{=html}
+```{=html}
+</p>
+```
+The hardware layer contains the PCB and STM32-based embedded control
+components used for system integration.
 
-This provides a controlled environment for studying controller response, overshoot, settling behavior and disturbance rejection.
-
----
+------------------------------------------------------------------------
 
 # Hardware-in-the-Loop
 
-The system bridges the simulation and embedded controller through a Hardware-in-the-Loop architecture.
+Hardware-in-the-Loop connects the simulation environment with the
+embedded controller.
 
-```text
+```{=html}
+<p align="center">
+```
+`<img src="docs/images/HIL-simulation-demo.png" width="95%">`{=html}
+```{=html}
+</p>
+```
+### HIL Architecture
+
+``` text
              SIMULATION
                   │
-          Target / Environment
+                  ▼
+        Target / Environment
                   │
                   ▼
-            Control Command
+           Control Command
                   │
                   ▼
-               STM32
+                STM32
                   │
                   ▼
             Gimbal / Motor
                   │
                   ▼
-              Feedback
+               Feedback
                   │
-                  └──────────────▶ Simulation
+                  └──────────────► Simulation
 ```
 
-This allows the embedded control layer to interact with simulated system conditions before complete physical integration.
+This allows the embedded control layer to interact with simulated system
+conditions before complete physical integration.
 
-### Command Interface
+------------------------------------------------------------------------
 
-```text
+# Communication Interface
+
+The system uses a structured serial communication format between the
+higher-level software and the STM32 controller.
+
+### Command Format
+
+``` text
 X{pan}Y{tilt}Z{distance}
 ```
 
-Example:
+### Example
 
-```text
+``` text
 X12.5Y-5.2Z1500.0
 ```
 
 ### Telemetry
 
-```text
+``` text
 PAN:12.5,TILT:-5.2,TEMP:34.2,STATUS:TRACKING
 ```
 
-The communication layer keeps the simulation, embedded controller and higher-level software loosely coupled.
+The communication layer keeps the simulation, embedded controller and
+higher-level software loosely coupled.
 
----
-
-# Operator Dashboard
-
-<p align="center">
-  <img src="docs/images/dashboard.png" width="95%">
-</p>
-
-The dashboard provides a unified operator interface for:
-
-* Camera feed
-* Computer-vision detections
-* Radar visualization
-* Target information
-* STM32 telemetry
-* System state
-* Connection status
-
-The dashboard supports both simulated and hardware-connected workflows.
-
----
+------------------------------------------------------------------------
 
 # Operating Modes
 
 ### Mock / Simulation
 
-```bash
+``` bash
 python main.py --mock
 ```
 
-Runs the dashboard with simulated subsystem data.
+Runs the dashboard using simulated subsystem data.
 
 ### Camera + Computer Vision
 
-```bash
+``` bash
 python main.py --mock --camera 1
 ```
 
@@ -330,136 +349,177 @@ Uses a real camera while retaining simulated components.
 
 ### Test Video
 
-```bash
+``` bash
 python main.py --mock --video <video-path>
 ```
 
-Runs the CV pipeline against recorded footage.
+Runs the computer-vision pipeline against recorded footage.
 
 ### Hardware
 
-```bash
+``` bash
 python main.py
 ```
 
 Uses the configured physical interfaces.
 
----
+------------------------------------------------------------------------
 
 # Technology Stack
 
-| Subsystem        | Technology                   |
-| ---------------- | ---------------------------- |
-| Computer Vision  | Python · OpenCV · YOLO       |
-| Dashboard        | Python · PySide6             |
-| Embedded Control | STM32                        |
-| Communication    | UART / Serial                |
-| Simulation       | Three.js · WebGL             |
-| Control          | PID · Closed-loop control    |
-| Hardware         | Sensors · Actuators · Gimbal |
-| Mechanical       | CAD                          |
-| Version Control  | Git                          |
+  Subsystem          Technology
+  ------------------ ---------------------------
+  Computer Vision    Python · OpenCV · YOLO
+  Dashboard          Python · PySide6
+  Embedded Control   STM32
+  Communication      UART / Serial
+  Simulation         Three.js · WebGL
+  Control            PID · Closed-loop control
+  Hardware           PCB · Sensors · Actuators
+  Mechanical         PAN/TILT Gimbal
+  Version Control    Git
 
----
+------------------------------------------------------------------------
 
 # Repository Structure
 
-```text
+``` text
 SIH-26-Anti-Drone-System/
 │
-├── dashboard/                 # Operator dashboard
-├── vision/                    # Computer vision
-├── radar/                     # Radar subsystem
-├── gimbal/                    # Gimbal and control
+├── dashboard/                  # Operator dashboard
+├── vision/                     # Computer vision
+├── radar/                      # Radar subsystem
+├── gimbal/                     # Gimbal and control
 │
 ├── firmware/
-│   └── STM32_HIL_Simulation/ # STM32 HIL integration
+│   └── STM32_HIL_Simulation/   # STM32 / HIL integration
 │
-├── simulation/                # Real-time 3D simulation
-├── hardware/                  # Electronics and wiring
-├── mechanical/                # CAD and mechanical design
-├── docs/                      # Technical documentation
-└── tests/                     # Testing
+├── simulation/                 # Real-time 3D simulation
+├── hardware/                   # Electronics and wiring
+├── mechanical/                 # Mechanical design
+├── docs/
+│   └── images/                 # Project images
+└── tests/                      # Testing
 ```
 
----
+------------------------------------------------------------------------
 
 # Quick Start
 
-```bash
+Clone the repository:
+
+``` bash
 git clone https://github.com/Buddhadeb-ss/SIH-26-Anti-Drone-System.git
 cd SIH-26-Anti-Drone-System
 ```
 
-### Dashboard
+## Dashboard
 
-```bash
+``` bash
 cd dashboard
 pip install -r requirements.txt
 python main.py --mock
 ```
 
-### Simulation
+## Simulation
 
-Open the simulation entry point from:
+The simulation is located in:
 
-```text
+``` text
 simulation/
 ```
 
-The simulation can be run independently from the dashboard and is designed for interactive system-level testing.
+It can be run independently for interactive system-level visualization
+and testing.
 
----
+------------------------------------------------------------------------
 
 # Engineering Approach
 
 The project follows a layered development architecture:
 
-```text
-             SENSING
+``` text
+              SENSING
           Radar + Camera
                 │
                 ▼
-           PERCEPTION
-        Detection + Tracking
+            PERCEPTION
+         Detection + Tracking
                 │
                 ▼
-            CONTROL
-             STM32
+              CONTROL
+               STM32
                 │
                 ▼
-            ACTUATION
-           PAN / TILT
+             ACTUATION
+             PAN / TILT
                 │
                 ▼
-           SIMULATION
-         + HIL VALIDATION
+            VALIDATION
+          Simulation + HIL
 ```
 
-The separation between these layers makes it possible to test individual components while preserving the interfaces required for complete system integration.
+The separation between sensing, perception, control and actuation allows
+individual components to be developed and tested while maintaining the
+interfaces required for complete system integration.
 
----
+------------------------------------------------------------------------
+
+# Project Highlights
+
+-   **Multi-sensor architecture** combining radar and camera-based
+    perception
+-   **Computer vision** for target detection and tracking
+-   **STM32 embedded control** for hardware integration
+-   **2-axis PAN/TILT gimbal** for precision pointing
+-   **Real-time 3D simulation** for system-level visualization
+-   **PID closed-loop control** for gimbal response
+-   **Hardware-in-the-Loop testing** connecting simulation and embedded
+    hardware
+-   **Modular repository structure** for independent subsystem
+    development
+
+------------------------------------------------------------------------
 
 # Project Context
 
 **Smart India Hackathon 2026**
 
 **Problem Statement:** SIH26050
+
 **Organization:** DRDO
-**Domain:** High-Altitude Performance Optimization & Robust Design of Anti-Drone System
 
-The project addresses the challenge through a combination of:
+**Domain:** High-Altitude Performance Optimization & Robust Design of
+Anti-Drone System
 
-**Detection → Tracking → Precision Pointing → Embedded Control → Simulation → HIL**
+### Overall System
 
----
+``` text
+Detection
+    ↓
+Tracking
+    ↓
+Precision Pointing
+    ↓
+Embedded Control
+    ↓
+Simulation
+    ↓
+HIL Validation
+```
 
-## License
+------------------------------------------------------------------------
+
+# License
 
 This project is licensed under the [MIT License](./LICENSE).
 
----
+------------------------------------------------------------------------
 
+```{=html}
 <p align="center">
-  <b>Built for SIH 2026 · SIH26050</b>
+```
+`<b>`{=html}Built for SIH 2026 · SIH26050`</b>`{=html}
+```{=html}
 </p>
+```
